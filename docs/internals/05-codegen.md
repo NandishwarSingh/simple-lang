@@ -579,8 +579,9 @@ full lab showing zero regression elsewhere.
   ops (`vload/vstore/vfadd/vfsub/vfmul/vfdiv/vdup`) typed as `Kd` so
   they reuse the FP register allocator, with the 128-bit width living in
   the emitter (`v.2d` on arm64, 3-operand AVX on amd64). Two shapes are
-  emitted today: **element-wise** f64 loops (strip-mined 2-lane body +
-  scalar remainder) and single-statement **reductions** (four
+  emitted today: **element-wise** f64 loops (strip-mined, 2-wide
+  unrolled — independent vectors per iteration so the CPU overlaps their
+  chains — plus a scalar remainder) and single-statement **reductions** (four
   independent 2-lane accumulators, combined in a fixed order — the
   unroll breaks the latency-bound dependency chain, and reassociation is
   licensed by the determinism decision). Register pressure over a cap

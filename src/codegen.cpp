@@ -3083,9 +3083,17 @@ private:
         placeLabel(endL);
         popScope();
     }
-    // strip-mined: a 2-lane vector loop while i+2 <= hi, then a scalar
-    // remainder that continues from the same counter for the odd tail.
+    // strip-mined: an UNROLL-wide vector loop while i+2*UNROLL <= hi, then a
+    // scalar remainder that continues from the same counter for the tail.
+    // Unrolling processes UNROLL independent 2-lane vectors per iteration so
+    // the CPU can overlap their compute/load/store chains (element-wise phases
+    // like `((v*.5+.25)*v+.1)*.5 + y*.5` are a per-element dependency chain).
+    // Each vector is computed and stored before the next, so no `Kd` vector is
+    // ever live across a store — QBE never has to spill one (which would drop a
+    // lane). The opt-vs-no-opt + cross-arch differentials guard against it.
     void emitVecLoop(Stmt& s) {
+        const int UNROLL = 2;
+        const int STEP = 2 * UNROLL;           // elements handled per iteration
         std::string start = genExpr(*s.expr);
         std::string end = genExpr(*s.expr2);
         flushTemps();
@@ -3102,25 +3110,29 @@ private:
         placeLabel(vcond);
         std::string iv = newTmp(); emit(iv + " =l loadl " + iSlot);
         std::string ev = newTmp(); emit(ev + " =l loadl " + endSlot);
-        std::string iw = newTmp(); emit(iw + " =l add " + iv + ", 2");
+        std::string iw = newTmp(); emit(iw + " =l add " + iv + ", " + std::to_string(STEP));
         std::string c = newTmp();  emit(c + " =w cslel " + iw + ", " + ev);
         emit("jnz " + c + ", " + vbody + ", " + rcond);
         terminated_ = true;
         placeLabel(vbody);
         {
-            std::map<std::string, std::string> vtemps;
-            for (auto& stp : s.body) {
-                Stmt& st = *stp;
-                if (st.kind == StmtKind::Let)
-                    vtemps[st.name] = genVecExpr(*st.expr, iSlot, vtemps);
-                else {
-                    std::string vr = genVecExpr(*st.expr, iSlot, vtemps);
-                    std::string addr = vecElemAddr(*st.lhs, iSlot);
-                    emit("vstore " + vr + ", " + addr);
+            for (int u = 0; u < UNROLL; u++) {
+                vecLaneOff_ = 2 * u;           // this vector's element pair
+                std::map<std::string, std::string> vtemps; // lets are per-element
+                for (auto& stp : s.body) {
+                    Stmt& st = *stp;
+                    if (st.kind == StmtKind::Let)
+                        vtemps[st.name] = genVecExpr(*st.expr, iSlot, vtemps);
+                    else {
+                        std::string vr = genVecExpr(*st.expr, iSlot, vtemps);
+                        std::string addr = vecElemAddr(*st.lhs, iSlot);
+                        emit("vstore " + vr + ", " + addr);
+                    }
                 }
             }
+            vecLaneOff_ = 0;
             std::string i2 = newTmp(); emit(i2 + " =l loadl " + iSlot);
-            std::string i3 = newTmp(); emit(i3 + " =l add " + i2 + ", 2");
+            std::string i3 = newTmp(); emit(i3 + " =l add " + i2 + ", " + std::to_string(STEP));
             emit("storel " + i3 + ", " + iSlot);
             emit("jmp " + vcond);
             terminated_ = true;
