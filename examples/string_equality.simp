@@ -1,0 +1,31 @@
+// string_equality.simp — == and != on strings compare CONTENTS, byte for
+// byte, over the whole length. Not identity, and (since strings are
+// length-prefixed, not NUL-terminated) correct even with embedded '\0'.
+
+fn main() {
+    // built vs literal: same bytes compare equal
+    let built = "foo" + "bar";
+    print(built == "foobar");       // true
+    print(built != "foobar");       // false
+
+    // a parsed number equals the literal it prints as
+    print(str(255) == "255");       // true
+
+    // different contents, same length
+    print("cat" == "cot");          // false
+
+    // different lengths are never equal
+    print("hi" == "high");          // false
+    print("" == "");                // true
+
+    // embedded NUL: bytes past the NUL still count
+    let a = "a\0x";                 // 3 bytes
+    let b = "a\0y";                 // 3 bytes, differs at index 2
+    print(len(a));                  // 3
+    print(a == b);                  // false — content differs
+    print(a == "a");                // false — lengths differ (3 vs 1)
+
+    // equality drives control flow, e.g. a tiny command dispatcher
+    let cmd = "sta" + "rt";
+    if (cmd == "start") { print(1); } else { print(0); }
+}

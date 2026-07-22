@@ -1,0 +1,53 @@
+// maps.simp — v0.9: hash maps, the second built-in collection.
+//
+// map K V holds values by key (K is str or int). Reading a missing key
+// stops the program — check with has() first. Iteration visits keys in
+// insertion order, so programs behave identically on every machine.
+
+fn main() {
+    // the classic: count words
+    let mut words = list str;
+    push(words, "the"); push(words, "cat"); push(words, "and");
+    push(words, "the"); push(words, "hat");
+    let mut counts = map str int;
+    for (i in 0..len(words)) {
+        let w = words[i];
+        if (has(counts, w)) { counts[w] = counts[w] + 1; }
+        else { counts[w] = 1; }
+    }
+    print(len(counts));            // 4 distinct words
+    print(counts["the"]);          // 2
+
+    // int keys work too
+    let mut names = map int str;
+    names[7] = "seven";
+    names[42] = "answer";
+    print(names[42]);
+
+    // del removes, deleting an absent key is a quiet no-op
+    del(names, 7);
+    del(names, 7);
+    print(len(names));
+
+    // iteration: insertion order, always
+    let mut m = map str int;
+    m["b"] = 2; m["a"] = 1; m["c"] = 3;
+    for (k in m) {
+        print(k + "=" + str(m[k]));
+    }
+
+    // value semantics: assignment copies (lazily), like every Simple value
+    let mut mine = map str int;
+    mine["x"] = 1;
+    let yours = mine;
+    mine["x"] = 100;
+    print(mine["x"]);
+    print(yours["x"]);
+
+    // maps nest: values can be lists, structs, even other maps
+    let mut index = map str list int;
+    let mut pages = list int;
+    push(pages, 3); push(pages, 17);
+    index["simple"] = pages;
+    print(len(index["simple"]));
+}

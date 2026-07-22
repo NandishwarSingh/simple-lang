@@ -1,0 +1,308 @@
+// ============================================================================
+// plasma.simp — a showcase of every feature Simple has as of v0.6.
+//
+// Opens a real graphical window and renders an animated plasma field with a
+// bouncing particle swarm on top. A pool of worker threads computes the
+// image, one scanline at a time, and streams finished rows back through a
+// channel; the main thread blits them into a pixel buffer and hands it to
+// SDL2 over raw pointers.
+//
+//   build: ./simplec examples/plasma.simp --link SDL2 \
+//              --libdir /opt/homebrew/lib -o plasma
+//   (or just run tools/build_plasma.sh)
+//
+// Features exercised, all in this one file:
+//   sized integers (u8/u32/i32/u64)   bitwise ops and shifts
+//   structs, nested structs           fixed + 2-D arrays, array fill
+//   value semantics                   immutability (let vs let mut)
+//   strings: build, compare, len      recursion
+//   if/else, while, for..in           break and continue
+//   spawn + channels (no data races)  unsafe blocks and raw pointers
+//   extern fn C interop (SDL2)        runtime bounds checking
+// ============================================================================
+
+// ---- C interop: the entire SDL2 surface we need ---------------------------
+
+extern fn SDL_Init(flags: u32) -> i32;
+extern fn SDL_CreateWindow(title: str, x: i32, y: i32, w: i32, h: i32,
+                           flags: u32) -> *u8;
+extern fn SDL_CreateRenderer(win: *u8, index: i32, flags: u32) -> *u8;
+extern fn SDL_CreateTexture(ren: *u8, format: u32, access: i32,
+                            w: i32, h: i32) -> *u8;
+extern fn SDL_UpdateTexture(tex: *u8, rect: *u8, pixels: *u8, pitch: i32) -> i32;
+extern fn SDL_RenderClear(ren: *u8) -> i32;
+extern fn SDL_RenderCopy(ren: *u8, tex: *u8, src: *u8, dst: *u8) -> i32;
+extern fn SDL_RenderPresent(ren: *u8);
+extern fn SDL_PollEvent(ev: *u8) -> i32;
+extern fn SDL_SetWindowTitle(win: *u8, title: str);
+extern fn SDL_GetTicks() -> u32;
+extern fn SDL_Delay(ms: u32);
+extern fn SDL_DestroyWindow(win: *u8);
+extern fn SDL_Quit();
+
+// ---- data ------------------------------------------------------------------
+
+struct Job {                 // one scanline of work handed to a thread
+    y: int,
+    t: int,
+}
+
+struct Row {                 // the finished scanline coming back
+    y: int,
+    px: u32[640],
+}
+
+struct Vec {
+    x: int,
+    y: int,
+}
+
+struct Particle {
+    pos: Vec,                // nested struct
+    vel: Vec,
+    hue: int,
+}
+
+// ---- colour ----------------------------------------------------------------
+
+// Pack four 8-bit channels into one 32-bit pixel. Pure bit work.
+fn argb(a: u8, r: u8, g: u8, b: u8) -> u32 {
+    return (u32(a) << 24) | (u32(r) << 16) | (u32(g) << 8) | u32(b);
+}
+
+// A cheap integer "sine": a triangle wave folded into a smooth-ish curve.
+// Period 256, output 0..255. No floating point anywhere in this program.
+fn wave(x: int) -> int {
+    let p = x % 256;
+    let mut v = p;
+    if (p >= 128) {
+        v = 255 - p;
+    }
+    // fold it once so the ramp curves instead of being straight
+    return (v * v) / 128;
+}
+
+// Recursion: octaves of the wave summed at halving amplitude.
+fn octave(x: int, depth: int) -> int {
+    if (depth == 0) {
+        return wave(x);
+    }
+    return (wave(x) + octave(x * 2, depth - 1)) / 2;
+}
+
+// ---- the worker ------------------------------------------------------------
+
+// Each worker loops forever: take a scanline job, compute it, send it back.
+// It shares no memory with anyone — the Row travels through the channel as a
+// private copy, so a data race is not expressible here.
+fn worker(jobs: chan Job, done: chan Row) {
+    while (true) {
+        let j = recv(jobs);
+        if (j.y < 0) {                    // sentinel: shut down
+            return;
+        }
+        let mut row = Row { y: j.y, px: [u32(0); 640] };
+        for (x in 0..640) {
+            let a = octave(x + j.t, 2);
+            let b = wave(j.y * 2 + j.t);
+            let c = wave(x + j.y + j.t * 2);
+            let r = u8((a + b) % 256);
+            let g = u8((b + c) % 256);
+            let bl = u8((c + a) % 256);
+            row.px[x] = argb(255, r, g, bl);
+        }
+        send(done, row);
+    }
+}
+
+// ---- particles -------------------------------------------------------------
+
+// Value semantics: takes a Particle, returns a *new* one. Nothing is mutated
+// through a reference, because Simple has no references to mutate through.
+fn step(p: Particle) -> Particle {
+    let mut nx = p.pos.x + p.vel.x;
+    let mut ny = p.pos.y + p.vel.y;
+    let mut vx = p.vel.x;
+    let mut vy = p.vel.y;
+    if (nx < 0 || nx > 639) {
+        vx = 0 - vx;
+        nx = p.pos.x;
+    }
+    if (ny < 0 || ny > 479) {
+        vy = 0 - vy;
+        ny = p.pos.y;
+    }
+    return Particle {
+        pos: Vec { x: nx, y: ny },
+        vel: Vec { x: vx, y: vy },
+        hue: (p.hue + 3) % 256,
+    };
+}
+
+// ---- tiny int-to-string, so the title bar can show live numbers ------------
+
+fn digits(n: int) -> str {
+    if (n < 10) {
+        let d = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+        return d[n];
+    }
+    return digits(n / 10) + digits(n % 10);   // recursion + string building
+}
+
+fn main() {
+    let w = 640;
+    let h = 480;
+
+    if (SDL_Init(0x20) != 0) {              // SDL_INIT_VIDEO
+        print("SDL_Init failed");
+        return;
+    }
+
+    let win = SDL_CreateWindow("Simple — plasma",
+                               i32(0x2FFF0000), i32(0x2FFF0000),  // centered
+                               i32(w), i32(h), 0x4);              // SHOWN
+    let ren = SDL_CreateRenderer(win, i32(0 - 1), 0x2);           // ACCELERATED
+    let tex = SDL_CreateTexture(ren, 0x16362004, 1,               // ARGB8888
+                                i32(w), i32(h));                  // STREAMING
+
+    // SDL_Rect{0,0,w,h} as a plain array — no struct-layout guesswork needed
+    let mut rect: i32[4] = [i32(0), i32(0), i32(w), i32(h)];
+    let mut ev = [u8(0); 64];               // SDL_Event is 56 bytes
+    let mut px = [u32(0); 307200];          // 640 * 480 pixel buffer
+
+    // a pool of workers, and the two channels connecting them to us
+    let jobs = chan Job(512);
+    let done = chan Row(512);
+    let nworkers = 4;
+    for (i in 0..4) {
+        spawn worker(jobs, done);
+    }
+
+    // the particle swarm — a fixed array of nested structs
+    let seedp = Particle {
+        pos: Vec { x: 0, y: 0 },
+        vel: Vec { x: 1, y: 1 },
+        hue: 0,
+    };
+    let mut parts = [seedp; 24];
+    let mut s: u64 = 987654321;
+    for (i in 0..24) {
+        s = s * 6364136223846793005 + 1442695040888963407;
+        let px0 = int(s >> 50) % 640;
+        s = s * 6364136223846793005 + 1442695040888963407;
+        let py0 = int(s >> 50) % 480;
+        parts[i] = Particle {
+            pos: Vec { x: px0, y: py0 },
+            vel: Vec { x: 1 + (i % 5), y: 1 + (i % 3) },
+            hue: (i * 10) % 256,
+        };
+    }
+
+    let start = SDL_GetTicks();
+    let mut frame = 0;
+    let mut running = true;
+
+    while (running) {
+        // ---- input ---------------------------------------------------------
+        let mut polling = true;
+        while (polling) {
+            let mut got = 0;
+            unsafe {
+                got = int(SDL_PollEvent(&ev[0]));
+            }
+            if (got == 0) {
+                polling = false;
+                continue;
+            }
+            let mut etype = 0;
+            unsafe {
+                let tp: *u32 = &ev[0];       // pointers interconvert in unsafe
+                etype = int(*tp);
+            }
+            if (etype == 0x100) {           // SDL_QUIT
+                running = false;
+            }
+            if (etype == 0x300) {           // SDL_KEYDOWN — any key quits
+                running = false;
+            }
+        }
+
+        // ---- hand every scanline to the pool, then collect them all --------
+        let t = frame * 3;
+        for (y in 0..480) {
+            send(jobs, Job { y: y, t: t });
+        }
+        for (i in 0..480) {
+            let row = recv(done);
+            let base = row.y * 640;
+            for (x in 0..640) {
+                px[base + x] = row.px[x];
+            }
+        }
+
+        // ---- particles on top ---------------------------------------------
+        for (i in 0..24) {
+            parts[i] = step(parts[i]);
+            let p = parts[i];
+            let col = argb(255, u8(p.hue), u8(255 - p.hue), u8(128));
+            // draw a small square, skipping anything off-screen
+            for (dy in 0..5) {
+                for (dx in 0..5) {
+                    let qx = p.pos.x + dx;
+                    let qy = p.pos.y + dy;
+                    if (qx < 0 || qx > 639) { continue; }
+                    if (qy < 0 || qy > 479) { continue; }
+                    px[qy * 640 + qx] = col;
+                }
+            }
+        }
+
+        // ---- present --------------------------------------------------------
+        unsafe {
+            SDL_UpdateTexture(tex, &rect[0], &px[0], i32(w * 4));
+        }
+        SDL_RenderClear(ren);
+        unsafe {
+            SDL_RenderCopy(ren, tex, null, null);   // null = whole texture
+        }
+        SDL_RenderPresent(ren);
+
+        frame = frame + 1;
+
+        // live stats in the title bar — string building and comparison
+        if (frame % 30 == 0) {
+            let secs = int(SDL_GetTicks() - start) / 1000;
+            let mut fps = 0;
+            if (secs > 0) {
+                fps = frame / secs;
+            }
+            let title = "Simple — plasma   frame " + digits(frame) +
+                        "   fps " + digits(fps) +
+                        "   workers " + digits(nworkers);
+            SDL_SetWindowTitle(win, title);
+        }
+
+        // stop after a while so the demo is self-terminating
+        if (frame >= 600) {
+            running = false;
+        }
+    }
+
+    // ---- shut the pool down cleanly, one pill per worker -------------------
+    for (i in 0..4) {
+        send(jobs, Job { y: 0 - 1, t: 0 });
+    }
+
+    let elapsed = int(SDL_GetTicks() - start);
+    print("frames rendered:");
+    print(frame);
+    print("milliseconds:");
+    print(elapsed);
+    if (elapsed > 0) {
+        print("frames per second:");
+        print(frame * 1000 / elapsed);
+    }
+
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+}

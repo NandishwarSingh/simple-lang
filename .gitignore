@@ -1,0 +1,37 @@
+# ---- build artifacts ----
+simplec
+build/
+perf/build/
+*.o
+src/qbe/*.o
+src/qbe/*/*.o
+
+# ---- generated intermediate + output files ----
+*.ssa
+*.s
+*.bin
+*.ppm
+*.png
+out.ppm
+
+# ---- compiled example / app binaries (root) ----
+plasma
+rtpure
+
+# keep example sources, drop anything else generated in examples/
+examples/*
+!examples/*.simp
+
+# ---- editor / OS cruft ----
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# ---- local tooling & scratch (not part of the project) ----
+.claude/
+CLAUDE.md
+AGENTS.md
+.cursor/
+.aider*
+scratch/

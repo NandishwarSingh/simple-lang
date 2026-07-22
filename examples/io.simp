@@ -1,0 +1,32 @@
+// io.simp — v0.85: talking to the outside world.
+//
+// Program arguments, stdin, files, and exit codes. File operations
+// return (T, error) — the whole reason IO waited for v0.8's error
+// design instead of guessing with empty strings.
+
+fn main() -> int {
+    // arguments, C convention: arg(0) is the program path, argc() counts it
+    print(argc() >= 1);
+
+    // stdin: input() reads one line, read_all() the rest ("" at EOF)
+    let name = input();
+    print("hello " + name);
+    let rest = read_all();
+    print(len(rest));
+
+    // files: write, read back, verify
+    let path = "build/io_scratch.txt";
+    let e1 = write_file(path, "alpha\nbeta\n");
+    if (e1 != ok) { print(e1.msg); exit(1); }
+    let (txt, e2) = read_file(path);
+    if (e2 != ok) { print(e2.msg); exit(1); }
+    print(len(txt));
+    print(substr(txt, 0, 5));
+
+    // failure carries the reason — and costs an if, not a crash
+    let (_, e3) = read_file("build/definitely_missing.txt");
+    print(e3 != ok);
+
+    // exit codes: return from main sets the status (or exit(n) anywhere)
+    return 0;
+}

@@ -1,0 +1,270 @@
+// ============================================================================
+// raytracer_pure.simp — a ray tracer in PURE Simple. No C, no extern, no libs.
+//
+// Same scene as examples/raytracer.simp, but written with real floating-point
+// math (v0.65) instead of fixed point, and with no external dependency at all:
+// it renders with a pool of worker threads and writes a P3 (ASCII) PPM image
+// straight to standard output using only the built-in `print`.
+//
+//   build: ./simplec examples/raytracer_pure.simp -o build/rtpure
+//   run:   ./build/rtpure > out.ppm       # then open out.ppm
+//
+// Everything below is Simple and only Simple: floats, structs, growable
+// lists (the scene is a `list Sphere`), recursion, value semantics,
+// spawn + channels — and print for output. No C, no libraries.
+// ============================================================================
+
+struct V3 {
+    x: float,
+    y: float,
+    z: float,
+}
+
+fn vadd(a: V3, b: V3) -> V3 {
+    return V3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+fn vsub(a: V3, b: V3) -> V3 {
+    return V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+fn vscale(a: V3, s: float) -> V3 {
+    return V3 { x: a.x * s, y: a.y * s, z: a.z * s };
+}
+fn vdot(a: V3, b: V3) -> float {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+// sqrt by Newton's method — now on real floats
+fn fsqrt(n: float) -> float {
+    if (n <= 0.0) {
+        return 0.0;
+    }
+    let mut x = n;
+    for (i in 0..30) {
+        x = (x + n / x) * 0.5;
+    }
+    return x;
+}
+
+fn vlen(a: V3) -> float {
+    return fsqrt(vdot(a, a));
+}
+fn vnorm(a: V3) -> V3 {
+    let l = vlen(a);
+    if (l == 0.0) {
+        return a;
+    }
+    return vscale(a, 1.0 / l);
+}
+fn vreflect(d: V3, n: V3) -> V3 {
+    return vsub(d, vscale(n, 2.0 * vdot(d, n)));
+}
+
+struct Sphere {
+    c: V3,
+    r: float,
+    col: V3,
+    refl: float,
+}
+
+struct Hit {
+    t: float,
+    idx: int,
+}
+
+fn hitSphere(ro: V3, rd: V3, s: Sphere) -> float {
+    let oc = vsub(ro, s.c);
+    let b = 2.0 * vdot(oc, rd);
+    let c = vdot(oc, oc) - s.r * s.r;
+    let disc = b * b - 4.0 * c;
+    if (disc < 0.0) {
+        return 0.0 - 1.0;
+    }
+    let sq = fsqrt(disc);
+    let t = (0.0 - b - sq) * 0.5;
+    if (t > 0.001) {
+        return t;
+    }
+    let t2 = (0.0 - b + sq) * 0.5;
+    if (t2 > 0.001) {
+        return t2;
+    }
+    return 0.0 - 1.0;
+}
+
+fn nearest(ro: V3, rd: V3, sc: list Sphere) -> Hit {
+    let mut best = 0.0;
+    let mut bi = 0 - 1;
+    for (i in 0..len(sc)) {
+        let t = hitSphere(ro, rd, sc[i]);
+        if (t > 0.0) {
+            if (bi < 0 || t < best) {
+                best = t;
+                bi = i;
+            }
+        }
+    }
+    return Hit { t: best, idx: bi };
+}
+
+fn trace(ro: V3, rd: V3, sc: list Sphere, depth: int) -> V3 {
+    let h = nearest(ro, rd, sc);
+    if (h.idx < 0) {
+        let t = (rd.y + 1.0) * 0.5;
+        return V3 { x: 0.1 + t * 0.1, y: 0.15 + t * 0.4, z: 0.25 + t * 0.55 };
+    }
+    let s = sc[h.idx];
+    let p = vadd(ro, vscale(rd, h.t));
+    let n = vnorm(vsub(p, s.c));
+
+    let lightPos = V3 { x: 6.0, y: 8.0, z: 0.0 - 4.0 };
+    let l = vnorm(vsub(lightPos, p));
+    let mut diff = vdot(n, l);
+    if (diff < 0.0) {
+        diff = 0.0;
+    }
+
+    // shadow ray
+    let sp = vadd(p, vscale(n, 0.01));
+    let sh = nearest(sp, l, sc);
+    if (sh.idx >= 0) {
+        diff = diff * 0.2;
+    }
+
+    let lit = diff * 0.7 + 0.2;
+    let mut col = vscale(s.col, lit);
+
+    if (depth > 0 && s.refl > 0.0) {
+        let rdir = vnorm(vreflect(rd, n));
+        let rcol = trace(sp, rdir, sc, depth - 1);
+        col = vadd(vscale(col, 1.0 - s.refl), vscale(rcol, s.refl));
+    }
+    return col;
+}
+
+fn chan255(v: float) -> int {
+    let mut x = v * 255.0;
+    if (x < 0.0) {
+        x = 0.0;
+    }
+    if (x > 255.0) {
+        x = 255.0;
+    }
+    return int(x);
+}
+
+// ---- worker protocol --------------------------------------------------------
+
+struct Job {
+    y: int,
+    stop: bool,
+}
+
+struct Row {
+    y: int,
+    r: int[400],
+    g: int[400],
+    b: int[400],
+}
+
+fn renderRow(y: int, sc: list Sphere) -> Row {
+    let mut row = Row { y: y, r: [0; 400], g: [0; 400], b: [0; 400] };
+    let origin = V3 { x: 3.5, y: 2.5, z: 5.0 };
+    let fwd = vnorm(vsub(V3 { x: 0.0, y: 1.0, z: 0.0 }, origin));
+    let right = vnorm(V3 { x: 0.0 - fwd.z, y: 0.0, z: fwd.x });
+    let up = V3 { x: 0.0, y: 1.0, z: 0.0 };
+
+    for (x in 0..400) {
+        let sx = (float(x) - 200.0) / 200.0;
+        let sy = (150.0 - float(y)) / 200.0;
+        let dir = vnorm(vadd(vadd(fwd, vscale(right, sx)), vscale(up, sy)));
+        let col = trace(origin, dir, sc, 4);
+        row.r[x] = chan255(col.x);
+        row.g[x] = chan255(col.y);
+        row.b[x] = chan255(col.z);
+    }
+    return row;
+}
+
+fn worker(jobs: chan Job, done: chan Row, sc: list Sphere) {
+    while (true) {
+        let j = recv(jobs);
+        if (j.stop) {
+            return;
+        }
+        send(done, renderRow(j.y, sc));
+    }
+}
+
+fn digits(n: int) -> str {
+    if (n < 10) {
+        let d = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+        return d[n];
+    }
+    return digits(n / 10) + digits(n % 10);
+}
+
+fn main() {
+    let w = 400;
+    let h = 300;
+
+    // scene
+    let ground = Sphere {
+        c: V3 { x: 0.0, y: 0.0 - 1000.0, z: 0.0 },
+        r: 1000.0,
+        col: V3 { x: 0.6, y: 0.6, z: 0.7 },
+        refl: 0.1,
+    };
+    let mut sc = list Sphere;
+    push(sc, ground);
+    push(sc, Sphere {
+        c: V3 { x: 0.0 - 2.0, y: 1.0, z: 0.0 },
+        r: 1.0,
+        col: V3 { x: 0.95, y: 0.3, z: 0.3 },
+        refl: 0.3,
+    });
+    push(sc, Sphere {
+        c: V3 { x: 1.0, y: 1.0, z: 1.0 },
+        r: 1.0,
+        col: V3 { x: 0.3, y: 0.9, z: 0.4 },
+        refl: 0.5,
+    });
+    push(sc, Sphere {
+        c: V3 { x: 2.2, y: 2.0, z: 0.0 - 2.0 },
+        r: 1.0,
+        col: V3 { x: 0.8, y: 0.8, z: 0.9 },
+        refl: 0.8,
+    });
+
+    // render every scanline across a pool of workers
+    let jobs = chan Job(400);
+    let done = chan Row(400);
+    for (i in 0..4) {
+        spawn worker(jobs, done, sc);
+    }
+
+    // an image buffer we can fill out of order and print in order
+    let mut img = [0; 360000];        // w * h * 3
+    for (y in 0..300) {
+        send(jobs, Job { y: y, stop: false });
+    }
+    for (i in 0..300) {
+        let row = recv(done);
+        let base = row.y * 400 * 3;
+        for (x in 0..400) {
+            img[base + x * 3] = row.r[x];
+            img[base + x * 3 + 1] = row.g[x];
+            img[base + x * 3 + 2] = row.b[x];
+        }
+    }
+    for (i in 0..4) {
+        send(jobs, Job { y: 0, stop: true });
+    }
+
+    // write a P3 PPM to stdout — one channel value per line is valid P3
+    print("P3");
+    print(digits(w) + " " + digits(h));
+    print("255");
+    for (i in 0..360000) {
+        print(img[i]);
+    }
+}

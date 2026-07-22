@@ -1,0 +1,45 @@
+// Sized integers and bitwise operators — the language of hardware.
+struct Packet {
+    version: u8,
+    flags: u8,
+    length: u16,
+    id: u32,
+}
+
+fn main() {
+    // bitwise operators
+    let flags = 0xF0;
+    print(flags & 0x30);          // 48
+    print(flags | 0x0F);          // 255
+    print(flags ^ 0xFF);          // 15
+    print(1 << 8);                // 256
+    print(~0);                    // -1
+
+    // sized types wrap at their own width
+    let a: u8 = 200;
+    print(a + 100);               // 44, not 300
+    let b: i8 = 100;
+    print(b + b);                 // -56
+
+    // unsigned really is unsigned
+    let big: u32 = 4000000000;
+    print(big);
+    print(big > 100);             // true
+
+    // explicit conversions — nothing is implicit
+    print(u8(300));               // 44
+    print(u32(0 - 1));            // 4294967295
+
+    // a hardware-shaped record: 1 + 1 + 2 + 4 bytes, naturally aligned
+    let p = Packet { version: 4, flags: 0x80, length: 1500, id: 123456 };
+    print(p.version);
+    print(p.length);
+    print(p.id);
+
+    // setting and reading register bits
+    let mut reg: u32 = 0;
+    reg = reg | (1 << 4);
+    reg = reg | (1 << 12);
+    print(reg);                   // 4112
+    print(reg >> 12);             // 1
+}

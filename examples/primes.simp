@@ -1,0 +1,25 @@
+// Prime sieve the slow-and-simple way — bools, %, nested loops.
+fn is_prime(n: int) -> bool {
+    if (n < 2) {
+        return false;
+    }
+    let mut d = 2;
+    while (d * d <= n) {
+        if (n % d == 0) {
+            return false;
+        }
+        d = d + 1;
+    }
+    return true;
+}
+
+fn main() {
+    print("primes up to 50:");
+    let mut n = 2;
+    while (n <= 50) {
+        if (is_prime(n)) {
+            print(n);
+        }
+        n = n + 1;
+    }
+}

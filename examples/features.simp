@@ -1,0 +1,38 @@
+// A tour of what Simple can do today (v0.1).
+
+fn max(a: int, b: int) -> int {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+fn is_even(n: int) -> bool {
+    return n % 2 == 0;
+}
+
+fn main() {
+    let answer = 42;       // immutable by default
+    let mut count = 0;     // opt in to mutation with `mut`
+    let name = "Simple";
+
+    print(name);
+    print(answer);
+    print(max(answer, 100));
+    print(is_even(answer));
+
+    // count up, skipping 3, stopping past 7
+    while (true) {
+        count = count + 1;
+        if (count == 3) {
+            continue;
+        }
+        if (count > 7) {
+            break;
+        }
+        print(count);
+    }
+
+    // short-circuit logic
+    print(is_even(1) || !is_even(2) || count == 8);
+}

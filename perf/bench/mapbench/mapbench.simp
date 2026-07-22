@@ -1,0 +1,48 @@
+// mapbench — hash map stress: int keys, str keys, churn, hit/miss lookups.
+// Deterministic checksum; no order-dependent folds (sums are commutative).
+
+fn main() {
+    // phase A: int keys — insert, overwrite, lookup, delete churn
+    let mut a = map int int;
+    let mut i = 0;
+    while (i < 10000000) {
+        a[(i * 2654435761) % 4000037] = i;
+        i = i + 1;
+    }
+    let mut suma = 0;
+    i = 0;
+    while (i < 10000000) {
+        let k = (i * 7919) % 4000037;
+        if (has(a, k)) { suma = suma + a[k]; }
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 1000000) {
+        del(a, (i * 31) % 4000037);
+        i = i + 1;
+    }
+    suma = suma + len(a) * 17;
+
+    // phase B: str keys — wordcount over generated words
+    let mut wc = map str int;
+    i = 0;
+    while (i < 1500000) {
+        let w = "w" + str((i * 131) % 9973);
+        if (has(wc, w)) { wc[w] = wc[w] + 1; }
+        else { wc[w] = 1; }
+        i = i + 1;
+    }
+    let mut sumb = 0;
+    i = 0;
+    while (i < 9973) {
+        let w = "w" + str(i);
+        if (has(wc, w)) { sumb = sumb + wc[w] * (i + 1); }
+        i = i + 1;
+    }
+
+    // phase C: iteration (commutative fold only)
+    let mut sumc = 0;
+    for (k in wc) { sumc = sumc + wc[k]; }
+
+    print(suma + sumb * 3 + sumc);
+}

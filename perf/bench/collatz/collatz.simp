@@ -1,0 +1,24 @@
+// Benchmark: total Collatz steps for 1..5000000 — tight data-dependent loops.
+fn steps(n0: int) -> int {
+    let mut n = n0;
+    let mut s = 0;
+    while (n != 1) {
+        if (n % 2 == 0) {
+            n = n / 2;
+        } else {
+            n = 3 * n + 1;
+        }
+        s = s + 1;
+    }
+    return s;
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 1;
+    while (i < 5000000) {
+        total = total + steps(i);
+        i = i + 1;
+    }
+    print(total);
+}

@@ -1,0 +1,66 @@
+// Growable lists (v0.7) — value semantics with copy-on-write.
+struct Point { x: int, y: int }
+
+fn build_squares(n: int) -> list int {
+    let mut r = list int;
+    for (i in 0..n) {
+        push(r, i * i);
+    }
+    return r;                    // ownership moves out, no copy
+}
+
+fn sum(xs: list int) -> int {
+    let mut s = 0;
+    for (i in 0..len(xs)) {
+        s = s + xs[i];
+    }
+    return s;                    // xs was a copy; caller's list is untouched
+}
+
+fn main() {
+    // the basics
+    let mut xs = list int;
+    push(xs, 10);
+    push(xs, 20);
+    push(xs, 30);
+    print(len(xs));              // 3
+    print(xs[1]);                // 20
+    xs[1] = 99;
+    print(xs[1]);                // 99
+    print(pop(xs));              // 30
+    print(len(xs));              // 2
+
+    // grows without limit
+    let big = build_squares(1000);
+    print(len(big));             // 1000
+    print(big[999]);             // 998001
+    print(sum(big));             // 332833500
+
+    // value semantics: a copy is independent
+    let mut a = list int;
+    push(a, 1);
+    let mut b = a;
+    push(b, 2);
+    print(len(a));               // 1  — a never saw b's push
+    print(len(b));               // 2
+
+    // lists of anything: strings, structs, even lists
+    let mut names = list str;
+    push(names, "a");
+    push(names, "b" + "c");
+    print(names[1]);             // bc
+
+    let mut pts = list Point;
+    push(pts, Point { x: 3, y: 4 });
+    print(pts[0].y);             // 4
+
+    let mut grid = list list int;
+    for (r in 0..3) {
+        let mut row = list int;
+        for (c in 0..3) {
+            push(row, r * 3 + c);
+        }
+        push(grid, row);
+    }
+    print(grid[2][1]);           // 7
+}

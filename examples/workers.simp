@@ -1,0 +1,29 @@
+// Concurrency: a worker pool. Two threads square numbers in parallel.
+fn worker(jobs: chan int, results: chan int) {
+    while (true) {
+        let j = recv(jobs);
+        if (j == -1) {           // sentinel: time to go home
+            return;
+        }
+        send(results, j * j);
+    }
+}
+
+fn main() {
+    let jobs = chan int(32);
+    let results = chan int(32);
+    spawn worker(jobs, results);
+    spawn worker(jobs, results);
+
+    for (i in 1..11) {
+        send(jobs, i);
+    }
+    send(jobs, -1);              // one pill per worker
+    send(jobs, -1);
+
+    let mut total = 0;
+    for (i in 0..10) {
+        total = total + recv(results);
+    }
+    print(total);                // 385, no matter how the work interleaves
+}

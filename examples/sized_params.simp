@@ -1,0 +1,12 @@
+fn pack(a: u8, r: u8, g: u8, b: u8) -> u32 {
+    return (u32(a) << 24) | (u32(r) << 16) | (u32(g) << 8) | u32(b);
+}
+fn addsmall(x: u16, y: u16) -> u16 { return x + y; }
+fn negi(v: i8) -> i8 { return 0 - v; }
+fn wide(v: u32) -> u64 { return u64(v) * 3; }
+fn main() {
+    print(int(pack(255, 16, 32, 64)));
+    print(int(addsmall(60000, 10000)));
+    print(int(negi(100)));
+    print(int(wide(4000000000)));
+}

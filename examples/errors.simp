@@ -1,0 +1,50 @@
+// errors.simp — v0.8: errors as values, Go style.
+//
+// A function that can fail returns (T, error). The caller receives both
+// with `let (v, e) = f(...)`, checks `e != ok`, and decides. No
+// exceptions, no hidden control flow — an error is just a value.
+
+fn parse_port(s: str) -> (int, error) {
+    if (len(s) == 0) { return 0, fail("empty port"); }
+    let n = int(s);
+    if (n == 0 && s[0] != '0') { return 0, fail("not a number: " + s); }
+    if (n < 1 || n > 65535) { return 0, fail("port out of range: " + str(n)); }
+    return n, ok;
+}
+
+fn connect(host: str, port_s: str) -> (str, error) {
+    let (port, e) = parse_port(port_s);
+    if (e != ok) { return "", fail(host + ": " + e.msg); }   // wrap and pass up
+    return host + ":" + str(port), ok;
+}
+
+// multiple returns are not only for errors
+fn divmod(a: int, b: int) -> (int, int) {
+    return a / b, a % b;
+}
+
+fn main() {
+    // the happy path
+    let (addr, e1) = connect("db.local", "5432");
+    print(addr);
+    print(e1 == ok);
+
+    // failures carry their reason
+    let (a2, e2) = connect("db.local", "70000");
+    print(len(a2));
+    print(e2.msg);
+
+    let (_, e3) = connect("cache", "");        // _ discards a value
+    print(e3.msg);
+
+    let (q, r) = divmod(17, 5);
+    print(q);
+    print(r);
+
+    // an error is an ordinary value: store it, pass it, compare it
+    let mut worst = ok;
+    let (_, e4) = parse_port("abc");
+    if (e4 != ok) { worst = e4; }
+    print(worst.msg);
+    print(worst == ok);
+}

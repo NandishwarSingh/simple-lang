@@ -1,0 +1,33 @@
+// Arrays: fixed-size, bounds-checked, value semantics — plus for loops.
+fn sum(xs: int[5]) -> int {
+    let mut total = 0;
+    for (i in 0..len(xs)) {
+        total = total + xs[i];
+    }
+    return total;
+}
+
+fn main() {
+    let mut xs = [3, 1, 4, 1, 5];
+    print(sum(xs));           // 14
+    print(len(xs));           // 5
+
+    xs[0] = 10;
+    print(sum(xs));           // 21
+
+    // copies are independent
+    let mut ys = xs;
+    ys[4] = 500;
+    print(xs[4]);             // 5
+    print(ys[4]);             // 500
+
+    // a 2 x 3 grid
+    let grid: int[2][3] = [[1, 2, 3], [4, 5, 6]];
+    let mut total = 0;
+    for (r in 0..2) {
+        for (c in 0..3) {
+            total = total + grid[r][c];
+        }
+    }
+    print(total);             // 21
+}

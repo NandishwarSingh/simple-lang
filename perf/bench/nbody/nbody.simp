@@ -1,0 +1,46 @@
+// IDIOMATIC-CLASS benchmark: particle interaction written the natural way
+// in each language. Simple's natural way is values in, values out — so no
+// two names can ever refer to the same particle, and the compiler may keep
+// fields in registers across the whole call.
+struct P {
+    x: int,
+    y: int,
+    vx: int,
+    vy: int,
+}
+
+fn interact(a: P, b: P) -> P {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    return P { x: a.x, y: a.y, vx: a.vx + dx / 16, vy: a.vy + dy / 16 };
+}
+
+fn main() {
+    let z = P { x: 0, y: 0, vx: 1, vy: 2 };
+    let mut ps = [z, z, z, z, z, z, z, z];
+    for (i in 0..8) {
+        ps[i] = P { x: i * 100, y: i * 37, vx: 1, vy: 2 };
+    }
+    for (s in 0..2000000) {
+        for (i in 0..8) {
+            for (j in 0..8) {
+                if (i != j) {
+                    ps[i] = interact(ps[i], ps[j]);
+                }
+            }
+        }
+        for (i in 0..8) {
+            ps[i] = P {
+                x: ps[i].x + ps[i].vx,
+                y: ps[i].y + ps[i].vy,
+                vx: ps[i].vx,
+                vy: ps[i].vy,
+            };
+        }
+    }
+    let mut h = 0;
+    for (i in 0..8) {
+        h = h + ps[i].x + ps[i].y + ps[i].vx + ps[i].vy;
+    }
+    print(h);
+}

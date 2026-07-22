@@ -1,0 +1,74 @@
+// vectorstorm — a float, vectorization-heavy workload built to break Simple.
+//
+// Every heavy loop is element-wise (each output depends only on its own
+// index), which is exactly what SIMD auto-vectorizers love — clang, rustc,
+// etc. will emit NEON/AVX and do 4-8 lanes at once. Simple's backend emits
+// scalar code, so this is where it should fall behind hard.
+//
+// Element-wise (no reductions inside the hot loops) also means the result
+// is bit-identical whether computed scalar or vector, so all languages
+// agree on the final quantized checksum.
+
+fn main() {
+    let n = 8192;
+    let mut x = [0.0; 8192];
+    let mut y = [0.0; 8192];
+    for (i in 0..8192) {
+        x[i] = float(i * 7 % 1000) / 1000.0;
+        y[i] = float(i * 13 % 1000) / 1000.0;
+    }
+
+    // Phase V — element-wise linear mixing (SAXPY-like), the SIMD sweet spot.
+    // Convex combinations keep every value in [0,1], so nothing overflows.
+    for (step in 0..120000) {
+        for (i in 0..8192) {
+            x[i] = x[i] * 0.99 + y[i] * 0.01;
+            y[i] = y[i] * 0.99 + x[i] * 0.01;
+        }
+    }
+
+    // Phase P — element-wise polynomial map (Horner), also vectorizable.
+    for (step in 0..70000) {
+        for (i in 0..8192) {
+            let v = x[i];
+            x[i] = ((v * 0.5 + 0.25) * v + 0.1) * 0.5 + y[i] * 0.5;
+        }
+    }
+
+    // Phase M — float matrix multiply. The inner sum is a reduction, so it
+    // stays scalar (deterministic) in every language — but it hammers array
+    // addressing, where Simple's arm64 backend is weakest.
+    let mut a = [[0.0; 128]; 128];
+    let mut b = [[0.0; 128]; 128];
+    for (i in 0..128) {
+        for (j in 0..128) {
+            a[i][j] = float((i * 7 + j) % 100) / 100.0;
+            b[i][j] = float((i * 5 + j * 3) % 100) / 100.0;
+        }
+    }
+    let mut trace = 0.0;
+    for (rep in 0..200) {
+        let mut c = [[0.0; 128]; 128];
+        for (i in 0..128) {
+            for (k in 0..128) {
+                let aik = a[i][k];
+                for (j in 0..128) {
+                    c[i][j] = c[i][j] + aik * b[k][j];
+                }
+            }
+        }
+        for (i in 0..128) {
+            trace = trace + c[i][i];
+        }
+    }
+
+    // Final reduction — scalar and in a fixed order in every language, so the
+    // sum is bit-identical. Quantize to an integer checksum.
+    let mut s = 0.0;
+    for (i in 0..8192) {
+        s = s + x[i] + y[i];
+    }
+    s = s + trace;
+    let q = int(s * 1000000.0);
+    print(q % 1000000000000);
+}

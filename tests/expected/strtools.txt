@@ -1,0 +1,10 @@
+4
+the
+fox
+true
+false
+true
+2026!
+2027
+50
+words: 4, first letter: t

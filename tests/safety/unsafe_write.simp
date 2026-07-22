@@ -1,0 +1,9 @@
+fn main() {
+    let a = [1, 2, 3];
+    let mut j = 2;
+    unsafe {
+        let p = &j;
+        *p = 99;              // j changed invisibly: MUST keep
+    }
+    print(a[j]);
+}

@@ -1,0 +1,9 @@
+db.local:5432
+true
+0
+db.local: port out of range: 70000
+cache: empty port
+3
+2
+not a number: abc
+false

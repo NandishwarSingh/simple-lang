@@ -1,0 +1,21 @@
+// Benchmark: 100k message round-trips between two threads — channel machinery.
+fn ponger(ping: chan int, pong: chan int) {
+    while (true) {
+        let v = recv(ping);
+        if (v == -1) { return; }
+        send(pong, v + 1);
+    }
+}
+
+fn main() {
+    let ping = chan int(1);
+    let pong = chan int(1);
+    spawn ponger(ping, pong);
+    let mut total = 0;
+    for (i in 0..100000) {
+        send(ping, i);
+        total = total + recv(pong);
+    }
+    send(ping, -1);
+    print(total);
+}

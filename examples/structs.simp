@@ -1,0 +1,37 @@
+// Structs: plain data, nesting, value semantics.
+struct Point {
+    x: int,
+    y: int,
+}
+
+struct Rect {
+    a: Point,
+    b: Point,
+}
+
+fn area(r: Rect) -> int {
+    return (r.b.x - r.a.x) * (r.b.y - r.a.y);
+}
+
+fn mid(p: Point, q: Point) -> Point {
+    return Point { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+}
+
+fn main() {
+    let mut r = Rect {
+        a: Point { x: 0, y: 0 },
+        b: Point { x: 10, y: 4 },
+    };
+    print(area(r));         // 40
+    r.b.y = 8;              // nested field assignment
+    print(area(r));         // 80
+
+    let m = mid(r.a, r.b);
+    print(m.x);             // 5
+    print(m.y);             // 4
+
+    // value semantics: a copy is a copy
+    let mut p = r.a;
+    p.x = 999;
+    print(r.a.x);           // 0 — r is untouched
+}

@@ -1,0 +1,75 @@
+// String tools (v0.7): char access, char literals, conversions, slicing.
+// Together these are what a lexer needs — a tiny tokenizer proves it.
+
+fn is_digit(c: int) -> bool {
+    return c >= '0' && c <= '9';
+}
+fn is_alpha(c: int) -> bool {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// split a line into its whitespace-separated words
+fn words(line: str) -> list str {
+    let mut out = list str;
+    let mut i = 0;
+    let n = len(line);
+    while (i < n) {
+        // skip spaces
+        while (i < n && line[i] == ' ') {
+            i = i + 1;
+        }
+        let start = i;
+        while (i < n && line[i] != ' ') {
+            i = i + 1;
+        }
+        if (i > start) {
+            push(out, substr(line, start, i));
+        }
+    }
+    return out;
+}
+
+// sum every run of digits found in the text (a mini number scanner)
+fn sum_numbers(text: str) -> int {
+    let mut total = 0;
+    let mut i = 0;
+    let n = len(text);
+    while (i < n) {
+        if (is_digit(text[i])) {
+            let start = i;
+            while (i < n && is_digit(text[i])) {
+                i = i + 1;
+            }
+            total = total + int(substr(text, start, i));
+        } else {
+            i = i + 1;
+        }
+    }
+    return total;
+}
+
+fn main() {
+    let line = "the quick brown fox";
+    let ws = words(line);
+    print(len(ws));                    // 4
+    print(ws[0]);                      // the
+    print(ws[3]);                      // fox
+
+    // char classification
+    print(is_digit('7'));              // true
+    print(is_alpha('7'));              // false
+    print(is_alpha('Q'));              // true
+
+    // conversions round-trip
+    let n = 2026;
+    print(str(n) + "!");               // 2026!
+    print(int(str(n)) + 1);            // 2027
+
+    // scan numbers out of mixed text
+    print(sum_numbers("a12b30c8"));    // 50
+
+    // build a report string with str()
+    let mut report = "words: " + str(len(ws));
+    report = report + ", first letter: " + substr(ws[0], 0, 1);
+    print(report);                     // words: 4, first letter: t
+}

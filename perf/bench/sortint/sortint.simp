@@ -1,0 +1,24 @@
+// Benchmark: insertion-sort 60 blocks of 800 pseudorandom ints —
+// data-dependent branches, array reads and writes, swaps.
+fn main() {
+    let mut a = [0; 800];
+    let mut check = 0;
+    let mut seed: u64 = 987654321;
+    for (round in 0..600) {
+        for (i in 0..800) {
+            seed = seed * 6364136223846793005 + 1442695040888963407;
+            a[i] = i64(seed >> 40);
+        }
+        for (i in 1..800) {
+            let v = a[i];
+            let mut j = i - 1;
+            while (j >= 0 && a[j] > v) {
+                a[j + 1] = a[j];
+                j = j - 1;
+            }
+            a[j + 1] = v;
+        }
+        check = check + a[0] + a[799];
+    }
+    print(check);
+}

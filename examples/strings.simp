@@ -1,0 +1,20 @@
+// Strings: concatenation, length, equality.
+fn repeat(s: str, n: int) -> str {
+    let mut out = "";
+    for (i in 0..n) {
+        out = out + s;
+    }
+    return out;
+}
+
+fn main() {
+    let name = "Sim" + "ple";
+    print(name);                    // Simple
+    print(len(name));               // 6
+    print(name == "Simple");        // true
+    print(name != "C++");           // true
+
+    let cheer = repeat("go! ", 3);
+    print(cheer);                   // go! go! go!
+    print(len(cheer));              // 12
+}

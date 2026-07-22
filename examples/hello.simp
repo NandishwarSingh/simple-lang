@@ -1,0 +1,4 @@
+// Your first Simple program.
+fn main() {
+    print("hello, world");
+}

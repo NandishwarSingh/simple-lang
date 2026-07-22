@@ -1,0 +1,30 @@
+// Floating-point arithmetic and conversions (v0.65).
+struct V { x: float, y: float }
+
+fn hypot(v: V) -> float {
+    let s = v.x * v.x + v.y * v.y;
+    let mut r = s;
+    for (i in 0..30) {
+        if (r > 0.0) { r = (r + s / r) * 0.5; }
+    }
+    return r;
+}
+
+fn main() {
+    print(3.5 + 2.0);            // 5.5
+    print(7.0 / 2.0);            // 3.5
+    print(0.0 - 1.5);           // -1.5
+    print(2.5 > 2.0);           // true
+    print(float(7) / 2.0);      // 3.5
+    print(int(3.99));           // 3
+    print(hypot(V { x: 3.0, y: 4.0 }));   // 5
+
+    let mut sum = 0.0;
+    for (i in 1..1000) {
+        sum = sum + 1.0 / float(i * i);
+    }
+    print(sum);                 // ~1.64393 (Basel problem)
+
+    let small: f32 = 1.5;
+    print(float(small) * 4.0);  // 6
+}

@@ -1,0 +1,29 @@
+// Benchmark: bit manipulation (popcount + mixing) over 20M values —
+// exercises the v0.6 bitwise operators and sized integers.
+fn popcount(x0: u64) -> int {
+    let mut x = x0;
+    let mut n = 0;
+    while (x != 0) {
+        x = x & (x - 1);
+        n = n + 1;
+    }
+    return n;
+}
+
+fn mix(h0: u64) -> u64 {
+    let mut h = h0;
+    h = h ^ (h >> 33);
+    h = h * 18397679294719823053;
+    h = h ^ (h >> 29);
+    return h;
+}
+
+fn main() {
+    let mut total = 0;
+    let mut h: u64 = 12345;
+    for (i in 0..20000000) {
+        h = mix(h);
+        total = total + popcount(h);
+    }
+    print(total);
+}

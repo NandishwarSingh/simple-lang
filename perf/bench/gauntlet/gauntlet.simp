@@ -1,0 +1,158 @@
+// gauntlet — a deliberately brutal mixed workload, built to expose every
+// weakness Simple has: value-semantics struct copies, list copy-on-write,
+// string allocation churn, branch-heavy sorting, deep recursion, and
+// cache/addressing-bound matrix multiply. All integer, so every language
+// computes the identical checksum.
+
+// deterministic LCG; returns a non-negative 31-bit value
+struct Rng { state: u64 }
+fn rng_next(r: Rng) -> Rng {
+    let s = r.state * 6364136223846793005 + 1442695040888963407;
+    return Rng { state: s };
+}
+fn rng_val(r: Rng) -> int {
+    return int(r.state >> 33);
+}
+
+// ---- Phase A: struct-copy n-body (Simple's worst case) ----
+struct Body { x: int, y: int, z: int, vx: int, vy: int, vz: int }
+
+fn interact(a: Body, b: Body) -> Body {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let dz = b.z - a.z;
+    let d2 = dx * dx + dy * dy + dz * dz + 1;
+    let inv = 1000000 / (d2 / 1000 + 1);
+    return Body {
+        x: a.x, y: a.y, z: a.z,
+        vx: a.vx + (dx * inv) / 100000,
+        vy: a.vy + (dy * inv) / 100000,
+        vz: a.vz + (dz * inv) / 100000,
+    };
+}
+
+fn phase_a() -> int {
+    let mut bs = [Body { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 }; 32];
+    let mut r = Rng { state: 88172645463325252 };
+    for (i in 0..32) {
+        r = rng_next(r);
+        let x = rng_val(r) % 1000;
+        r = rng_next(r);
+        let y = rng_val(r) % 1000;
+        r = rng_next(r);
+        let z = rng_val(r) % 1000;
+        bs[i] = Body { x: x, y: y, z: z, vx: 0, vy: 0, vz: 0 };
+    }
+    for (step in 0..30000) {
+        for (i in 0..32) {
+            for (j in 0..32) {
+                if (i != j) {
+                    bs[i] = interact(bs[i], bs[j]);   // struct value copy per call
+                }
+            }
+        }
+    }
+    let mut sum = 0;
+    for (i in 0..32) {
+        sum = sum + bs[i].vx + bs[i].vy + bs[i].vz;
+    }
+    return sum;
+}
+
+// ---- Phase B: list growth + string allocation churn ----
+fn phase_b() -> u64 {
+    let mut items = list str;
+    for (k in 0..500000) {
+        let s = "k" + str(k) + "_" + str((k * 13) % 97);
+        push(items, s);
+    }
+    let mut acc: u64 = 0;
+    for (i in 0..len(items)) {
+        let s = items[i];
+        let mut h: u64 = 14695981039346656037;
+        for (c in 0..len(s)) {
+            h = (h ^ u64(s[c])) * 1099511628211;
+        }
+        acc = acc ^ h;
+    }
+    return acc + u64(len(items));
+}
+
+// ---- Phase C: insertion sort (branch- and data-dependent) ----
+fn phase_c() -> int {
+    let mut a = [0; 25000];
+    let mut r = Rng { state: 99887766554433 };
+    for (i in 0..25000) {
+        r = rng_next(r);
+        a[i] = rng_val(r) % 1000000;
+    }
+    for (i in 1..25000) {
+        let v = a[i];
+        let mut j = i - 1;
+        while (j >= 0 && a[j] > v) {
+            a[j + 1] = a[j];
+            j = j - 1;
+        }
+        a[j + 1] = v;
+    }
+    let mut s = 0;
+    for (i in 0..25000) {
+        s = s + a[i] * i;
+    }
+    return s;
+}
+
+// ---- Phase D: deep recursion ----
+fn fib(n: int) -> int {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+fn phase_d() -> int {
+    return fib(40);
+}
+
+// ---- Phase E: matrix multiply (addressing / cache bound) ----
+fn phase_e() -> int {
+    let mut a = [[0; 100]; 100];
+    let mut b = [[0; 100]; 100];
+    for (i in 0..100) {
+        for (j in 0..100) {
+            a[i][j] = (i * 7 + j) % 13;
+            b[i][j] = (i * 5 + j * 3) % 11;
+        }
+    }
+    let mut acc = 0;
+    for (rep in 0..150) {
+        let mut c = [[0; 100]; 100];
+        for (i in 0..100) {
+            for (k in 0..100) {
+                let aik = a[i][k];
+                for (j in 0..100) {
+                    c[i][j] = c[i][j] + aik * b[k][j];
+                }
+            }
+        }
+        for (i in 0..100) {
+            acc = acc + c[i][i];
+        }
+    }
+    return acc;
+}
+
+fn main() {
+    let a = phase_a();
+    let b = phase_b();
+    let c = phase_c();
+    let d = phase_d();
+    let e = phase_e();
+    // fold every phase into one u64 checksum
+    let mut sum: u64 = 0;
+    sum = sum + u64(a);
+    sum = sum ^ b;
+    sum = sum + u64(c);
+    sum = sum ^ u64(d);
+    sum = sum + u64(e);
+    print(int(sum % 1000000000000));
+}

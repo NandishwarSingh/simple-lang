@@ -1,0 +1,5 @@
+fn overflow(n: int) -> int {
+    let a = [1, 2, 3];
+    return a[n];              // n unknown: MUST keep the check
+}
+fn main() { print(overflow(7)); }

@@ -1,0 +1,6 @@
+calling C directly
+1234
+5678
+65
+66
+100

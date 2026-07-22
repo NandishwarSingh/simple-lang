@@ -1,0 +1,28 @@
+// Benchmark: 200x200 integer matrix multiply — nested loops, array indexing.
+fn main() {
+    let mut a: int[200][200] = [[0; 200]; 200];
+    let mut b: int[200][200] = [[0; 200]; 200];
+    let mut c: int[200][200] = [[0; 200]; 200];
+    for (i in 0..200) {
+        for (j in 0..200) {
+            a[i][j] = (i + j) % 7;
+            b[i][j] = (i * j) % 5;
+            c[i][j] = 0;
+        }
+    }
+    for (rep in 0..20) {
+    for (i in 0..200) {
+        for (k in 0..200) {
+            let aik = a[i][k];
+            for (j in 0..200) {
+                c[i][j] = c[i][j] + aik * b[k][j];
+            }
+        }
+    }
+    }
+    let mut sum = 0;
+    for (i in 0..200) {
+        sum = sum + c[i][i];
+    }
+    print(sum);
+}

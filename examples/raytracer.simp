@@ -1,0 +1,471 @@
+// ============================================================================
+// raytracer.simp — a long-running, everything-at-once program.
+//
+// A recursive ray tracer with reflections, soft shading and an orbiting
+// camera, rendered by a pool of worker threads, displayed live in an SDL2
+// window, and written out as a PPM image through C's stdio at the end.
+//
+// Simple has no floating-point type, so every number here is 16.16 fixed
+// point held in an int: multiplication, division, square roots and vector
+// normalisation are all built from integer arithmetic and shifts.
+//
+//   build: ./simplec examples/raytracer.simp --link SDL2 \
+//              --libdir /opt/homebrew/lib -o build/raytracer
+//   (or:   sh tools/build_raytracer.sh)
+//   run:   ./build/raytracer            # writes render.ppm when it finishes
+//
+// Pure Simple:  fixed-point math, vector algebra, intersection, shading,
+//               recursive reflection, the scene, the worker protocol.
+// External C:   SDL2 for the window, stdio for the image file, stdlib exit.
+// ============================================================================
+
+extern fn SDL_Init(flags: u32) -> i32;
+extern fn SDL_CreateWindow(title: str, x: i32, y: i32, w: i32, h: i32,
+                           flags: u32) -> *u8;
+extern fn SDL_CreateRenderer(win: *u8, index: i32, flags: u32) -> *u8;
+extern fn SDL_CreateTexture(ren: *u8, format: u32, access: i32,
+                            w: i32, h: i32) -> *u8;
+extern fn SDL_UpdateTexture(tex: *u8, rect: *u8, pixels: *u8, pitch: i32) -> i32;
+extern fn SDL_RenderClear(ren: *u8) -> i32;
+extern fn SDL_RenderCopy(ren: *u8, tex: *u8, src: *u8, dst: *u8) -> i32;
+extern fn SDL_RenderPresent(ren: *u8);
+extern fn SDL_PollEvent(ev: *u8) -> i32;
+extern fn SDL_SetWindowTitle(win: *u8, title: str);
+extern fn SDL_GetTicks() -> u32;
+extern fn SDL_DestroyWindow(win: *u8);
+extern fn SDL_Quit();
+
+extern fn fopen(path: str, mode: str) -> *u8;
+extern fn fputs(s: str, f: *u8) -> i32;
+extern fn fwrite(p: *u8, size: u64, n: u64, f: *u8) -> u64;
+extern fn fclose(f: *u8) -> i32;
+
+// ---- 16.16 fixed point ------------------------------------------------------
+
+// 1.0 is 65536. Everything below works in these units.
+fn fx(n: int) -> int {
+    return n << 16;
+}
+
+fn fxmul(a: int, b: int) -> int {
+    return (a * b) >> 16;
+}
+
+fn fxdiv(a: int, b: int) -> int {
+    if (b == 0) {
+        return 0;
+    }
+    return (a << 16) / b;
+}
+
+// Integer square root by Newton's method — the classic loop.
+fn isqrt(n: int) -> int {
+    if (n <= 0) {
+        return 0;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while (y < x) {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    return x;
+}
+
+// sqrt of a fixed-point number, still fixed point
+fn fxsqrt(a: int) -> int {
+    if (a <= 0) {
+        return 0;
+    }
+    return isqrt(a << 16);
+}
+
+// ---- vectors ----------------------------------------------------------------
+
+struct V3 {
+    x: int,
+    y: int,
+    z: int,
+}
+
+fn vadd(a: V3, b: V3) -> V3 {
+    return V3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+fn vsub(a: V3, b: V3) -> V3 {
+    return V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+
+fn vscale(a: V3, s: int) -> V3 {
+    return V3 { x: fxmul(a.x, s), y: fxmul(a.y, s), z: fxmul(a.z, s) };
+}
+
+fn vdot(a: V3, b: V3) -> int {
+    return fxmul(a.x, b.x) + fxmul(a.y, b.y) + fxmul(a.z, b.z);
+}
+
+fn vlen(a: V3) -> int {
+    return fxsqrt(vdot(a, a));
+}
+
+fn vnorm(a: V3) -> V3 {
+    let l = vlen(a);
+    if (l == 0) {
+        return a;
+    }
+    return V3 { x: fxdiv(a.x, l), y: fxdiv(a.y, l), z: fxdiv(a.z, l) };
+}
+
+// mirror d about the normal n
+fn vreflect(d: V3, n: V3) -> V3 {
+    let k = fxmul(fx(2), vdot(d, n));
+    return vsub(d, vscale(n, k));
+}
+
+// ---- scene ------------------------------------------------------------------
+
+struct Sphere {
+    c: V3,       // centre
+    r: int,      // radius
+    col: V3,     // colour, each channel 0..1 in fixed point
+    refl: int,   // how mirror-like, 0..1
+}
+
+struct Hit {
+    t: int,      // distance along the ray
+    idx: int,    // which sphere, or -1
+}
+
+// Distance to the nearest intersection with one sphere, or -1 for a miss.
+fn hitSphere(ro: V3, rd: V3, s: Sphere) -> int {
+    let oc = vsub(ro, s.c);
+    let b = fxmul(fx(2), vdot(oc, rd));
+    let c = vdot(oc, oc) - fxmul(s.r, s.r);
+    let disc = fxmul(b, b) - fxmul(fx(4), c);
+    if (disc < 0) {
+        return 0 - 1;
+    }
+    let sq = fxsqrt(disc);
+    let t = fxdiv(0 - b - sq, fx(2));
+    if (t > 64) {                 // ignore hits right at the origin
+        return t;
+    }
+    let t2 = fxdiv(0 - b + sq, fx(2));
+    if (t2 > 64) {
+        return t2;
+    }
+    return 0 - 1;
+}
+
+fn nearest(ro: V3, rd: V3, sc: Sphere[4]) -> Hit {
+    let mut best = 0 - 1;
+    let mut bi = 0 - 1;
+    for (i in 0..4) {
+        let t = hitSphere(ro, rd, sc[i]);
+        if (t > 0) {
+            if (bi < 0 || t < best) {
+                best = t;
+                bi = i;
+            }
+        }
+    }
+    return Hit { t: best, idx: bi };
+}
+
+// The recursive part: shade a hit, then follow the reflected ray.
+fn trace(ro: V3, rd: V3, sc: Sphere[4], depth: int) -> V3 {
+    let h = nearest(ro, rd, sc);
+    if (h.idx < 0) {
+        // sky: a vertical gradient
+        let t = (rd.y + fx(1)) / 2;
+        let sky = V3 { x: fx(0), y: fxmul(t, 26214), z: fxmul(t, 52428) };
+        return vadd(V3 { x: 6553, y: 9830, z: 16384 }, sky);
+    }
+
+    let s = sc[h.idx];
+    let p = vadd(ro, vscale(rd, h.t));
+    let n = vnorm(vsub(p, s.c));
+
+    // one hard light, plus a little ambient
+    let lightPos = V3 { x: fx(6), y: fx(8), z: fx(0) - fx(4) };
+    let l = vnorm(vsub(lightPos, p));
+    let mut diff = vdot(n, l);
+    if (diff < 0) {
+        diff = 0;
+    }
+
+    // shadow ray — is anything between us and the light?
+    let sp = vadd(p, vscale(n, 655));
+    let sh = nearest(sp, l, sc);
+    if (sh.idx >= 0) {
+        diff = fxmul(diff, 13107);       // 0.2 — in shadow
+    }
+
+    let lit = fxmul(diff, 45875) + 13107;    // 0.7 * diffuse + 0.2 ambient
+    let mut col = vscale(s.col, lit);
+
+    // reflection: recurse, with a depth budget
+    if (depth > 0 && s.refl > 0) {
+        let rdir = vnorm(vreflect(rd, n));
+        let rcol = trace(sp, rdir, sc, depth - 1);
+        col = vadd(vscale(col, fx(1) - s.refl), vscale(rcol, s.refl));
+    }
+    return col;
+}
+
+// ---- pixels -----------------------------------------------------------------
+
+fn clamp255(v: int) -> int {
+    let n = v >> 8;                       // 16.16 -> 0..255
+    if (n < 0) {
+        return 0;
+    }
+    if (n > 255) {
+        return 255;
+    }
+    return n;
+}
+
+fn pack(c: V3) -> u32 {
+    let r = u32(clamp255(c.x));
+    let g = u32(clamp255(c.y));
+    let b = u32(clamp255(c.z));
+    return (u32(255) << 24) | (r << 16) | (g << 8) | b;
+}
+
+// ---- worker protocol --------------------------------------------------------
+
+struct Job {
+    y: int,
+    camx: int,       // camera position, fixed point
+    camz: int,
+    stop: bool,
+}
+
+struct Row {
+    y: int,
+    px: u32[400],
+}
+
+fn renderRow(y: int, camx: int, camz: int, sc: Sphere[4]) -> Row {
+    let mut row = Row { y: y, px: [u32(0); 400] };
+    let origin = V3 { x: camx, y: fx(2), z: camz };
+    // look at the origin
+    let fwd = vnorm(vsub(V3 { x: 0, y: fx(1), z: 0 }, origin));
+    let right = vnorm(V3 { x: 0 - fwd.z, y: 0, z: fwd.x });
+    let up = V3 { x: 0, y: fx(1), z: 0 };
+
+    for (x in 0..400) {
+        // screen coordinates in -1..1, roughly
+        let sx = fxdiv(fx(x - 200), fx(200));
+        let sy = fxdiv(fx(150 - y), fx(200));
+        let dir = vnorm(vadd(vadd(fwd, vscale(right, sx)), vscale(up, sy)));
+        let col = trace(origin, dir, sc, 3);
+        row.px[x] = pack(col);
+    }
+    return row;
+}
+
+fn worker(jobs: chan Job, done: chan Row, sc: Sphere[4]) {
+    while (true) {
+        let j = recv(jobs);
+        if (j.stop) {
+            return;
+        }
+        send(done, renderRow(j.y, j.camx, j.camz, sc));
+    }
+}
+
+// ---- small helpers ----------------------------------------------------------
+
+fn digits(n: int) -> str {
+    if (n < 0) {
+        return "-" + digits(0 - n);
+    }
+    if (n < 10) {
+        let d = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+        return d[n];
+    }
+    return digits(n / 10) + digits(n % 10);
+}
+
+// cosine-ish and sine-ish from a triangle wave, for the camera orbit.
+// Angle is 0..1023 around the circle; result is fixed point in -1..1.
+fn tri(a: int) -> int {
+    let p = a % 1024;
+    if (p < 256) {
+        return fxdiv(fx(p), fx(256));
+    }
+    if (p < 768) {
+        return fxdiv(fx(512 - p), fx(256));
+    }
+    return fxdiv(fx(p - 1024), fx(256));
+}
+
+fn wsin(a: int) -> int {
+    return tri(a);
+}
+
+fn wcos(a: int) -> int {
+    return tri(a + 256);
+}
+
+fn main() {
+    let w = 400;
+    let h = 300;
+    let frames = 240;
+
+    // ---- the scene ---------------------------------------------------------
+    let ground = Sphere {
+        c: V3 { x: 0, y: fx(0) - fx(1000), z: 0 },
+        r: fx(1000),
+        col: V3 { x: 39321, y: 39321, z: 45875 },
+        refl: 6553,
+    };
+    let mut sc = [ground; 4];
+    sc[1] = Sphere {
+        c: V3 { x: fx(0) - fx(2), y: fx(1), z: fx(0) },
+        r: fx(1),
+        col: V3 { x: 62259, y: 19660, z: 19660 },
+        refl: 19660,
+    };
+    sc[2] = Sphere {
+        c: V3 { x: fx(1), y: fx(1), z: fx(1) },
+        r: fx(1),
+        col: V3 { x: 19660, y: 58981, z: 26214 },
+        refl: 32768,
+    };
+    sc[3] = Sphere {
+        c: V3 { x: fx(2), y: fx(2), z: fx(0) - fx(2) },
+        r: fx(1),
+        col: V3 { x: 52428, y: 52428, z: 58981 },
+        refl: 52428,
+    };
+
+    // ---- window ------------------------------------------------------------
+    if (SDL_Init(0x20) != 0) {
+        print("SDL_Init failed");
+        return;
+    }
+    let win = SDL_CreateWindow("Simple — ray tracer",
+                               i32(0x2FFF0000), i32(0x2FFF0000),
+                               i32(w), i32(h), 0x4);
+    let ren = SDL_CreateRenderer(win, i32(0 - 1), 0x2);
+    let tex = SDL_CreateTexture(ren, 0x16362004, 1, i32(w), i32(h));
+
+    let mut ev = [u8(0); 64];
+    let mut px = [u32(0); 120000];
+
+    // ---- workers: each gets its own copy of the scene -----------------------
+    let jobs = chan Job(512);
+    let done = chan Row(512);
+    for (i in 0..4) {
+        spawn worker(jobs, done, sc);
+    }
+
+    let start = SDL_GetTicks();
+    let mut frame = 0;
+    let mut running = true;
+    let mut rays: int = 0;
+
+    while (running && frame < frames) {
+        // input
+        let mut polling = true;
+        while (polling) {
+            let mut got = 0;
+            unsafe {
+                got = int(SDL_PollEvent(&ev[0]));
+            }
+            if (got == 0) {
+                polling = false;
+                continue;
+            }
+            let mut etype = 0;
+            unsafe {
+                let tp: *u32 = &ev[0];
+                etype = int(*tp);
+            }
+            if (etype == 0x100 || etype == 0x300) {
+                running = false;
+            }
+        }
+
+        // orbit the camera and dispatch every scanline
+        let ang = (frame * 4) % 1024;
+        let camx = fxmul(wcos(ang), fx(7));
+        let camz = fxmul(wsin(ang), fx(7));
+        for (y in 0..300) {
+            send(jobs, Job { y: y, camx: camx, camz: camz, stop: false });
+        }
+        for (i in 0..300) {
+            let row = recv(done);
+            let base = row.y * 400;
+            for (x in 0..400) {
+                px[base + x] = row.px[x];
+            }
+        }
+        rays = rays + 120000;
+
+        unsafe {
+            SDL_UpdateTexture(tex, null, &px[0], i32(w * 4));
+        }
+        SDL_RenderClear(ren);
+        unsafe {
+            SDL_RenderCopy(ren, tex, null, null);
+        }
+        SDL_RenderPresent(ren);
+
+        frame = frame + 1;
+        if (frame % 10 == 0) {
+            let ms = int(SDL_GetTicks() - start);
+            let mut fps = 0;
+            if (ms > 0) {
+                fps = frame * 1000 / ms;
+            }
+            SDL_SetWindowTitle(win, "Simple — ray tracer   frame " +
+                               digits(frame) + "/" + digits(frames) +
+                               "   fps " + digits(fps));
+            print("frame " + digits(frame) + " of " + digits(frames));
+        }
+    }
+
+    // ---- shut the pool down ------------------------------------------------
+    for (i in 0..4) {
+        send(jobs, Job { y: 0, camx: 0, camz: 0, stop: true });
+    }
+
+    // ---- write the last frame out as a PPM, through C stdio ----------------
+    let mut rgb = [u8(0); 360000];       // 400 * 300 * 3
+    for (i in 0..120000) {
+        let p = px[i];
+        rgb[i * 3] = u8((p >> 16) & 255);
+        rgb[i * 3 + 1] = u8((p >> 8) & 255);
+        rgb[i * 3 + 2] = u8(p & 255);
+    }
+    let f = fopen("render.ppm", "wb");
+    unsafe {
+        if (f == null) {
+            print("could not open render.ppm");
+        } else {
+            fputs("P6\n" + digits(w) + " " + digits(h) + "\n255\n", f);
+            fwrite(&rgb[0], 1, 360000, f);
+            fclose(f);
+            print("wrote render.ppm");
+        }
+    }
+
+    let ms = int(SDL_GetTicks() - start);
+    print("frames:");
+    print(frame);
+    print("milliseconds:");
+    print(ms);
+    print("primary rays:");
+    print(rays);
+    if (ms > 0) {
+        print("rays per second:");
+        print(rays / ms * 1000);
+    }
+
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+}

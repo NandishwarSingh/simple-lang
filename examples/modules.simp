@@ -1,0 +1,24 @@
+// modules.simp — v0.9 phase 2: a program split across files.
+//
+// `import "path"` pulls a sibling file's functions in; names are shared
+// across the whole program, so an imported function is called directly.
+// `import "path" as name` lets you qualify a call when you want to be
+// explicit about which file it comes from.
+
+import "textkit/words.simp";
+import "textkit/tally.simp" as freq;
+
+fn main() {
+    let line = "the quick brown fox the lazy dog";
+
+    // word_count comes from words.simp — called by its plain name
+    print(word_count(line));
+
+    // tally comes from tally.simp via the `freq` alias
+    let counts = freq.tally(line);
+    print(counts[116]);          // 't' appears... (2, in "the" x2)
+    print(len(counts));          // distinct byte values
+
+    // is_space (also from words.simp) is just as reachable
+    if (is_space(32)) { print(1); }
+}

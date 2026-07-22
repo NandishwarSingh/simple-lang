@@ -1,0 +1,25 @@
+// Concurrency: strings flowing through a thread pipeline.
+fn shouter(inbox: chan str, outbox: chan str) {
+    while (true) {
+        let msg = recv(inbox);
+        if (msg == "stop") {
+            send(outbox, "stop");
+            return;
+        }
+        send(outbox, msg + "!");
+    }
+}
+
+fn main() {
+    let a = chan str(8);
+    let b = chan str(8);
+    spawn shouter(a, b);
+
+    send(a, "hello");
+    send(a, "world");
+    send(a, "stop");
+
+    print(recv(b));              // hello!
+    print(recv(b));              // world!
+    print(recv(b) == "stop");    // true
+}

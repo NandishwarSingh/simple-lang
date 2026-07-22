@@ -1,0 +1,41 @@
+// Benchmark: 8 workers split the collatz 1..5000000 range — parallel speedup.
+fn steps(n0: int) -> int {
+    let mut n = n0;
+    let mut s = 0;
+    while (n != 1) {
+        if (n % 2 == 0) {
+            n = n / 2;
+        } else {
+            n = 3 * n + 1;
+        }
+        s = s + 1;
+    }
+    return s;
+}
+
+fn worker(start: int, end: int, results: chan int) {
+    let mut total = 0;
+    let mut i = start;
+    while (i < end) {
+        total = total + steps(i);
+        i = i + 1;
+    }
+    send(results, total);
+}
+
+fn main() {
+    let results = chan int(8);
+    let chunk = 625000;
+    for (w in 0..8) {
+        let mut lo = w * chunk + 1;
+        if (w > 0) { lo = w * chunk; }
+        let mut hi = (w + 1) * chunk;
+        if (w == 7) { hi = 5000000; }
+        spawn worker(lo, hi, results);
+    }
+    let mut total = 0;
+    for (w in 0..8) {
+        total = total + recv(results);
+    }
+    print(total);
+}
