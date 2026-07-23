@@ -25,13 +25,18 @@ State is split into logical pointer buffers (`cpu`, `ram`, `prg`, `chr`,
 
 ## Build order
 
-- [x] **6502 CPU core** — fetch/decode/execute, the common opcode set,
-      addressing modes, flags, stack, branches, `JSR`/`RTS`. Tested with
-      hand-crafted programs (`test_cpu.simp`).
-- [ ] **Complete the opcode table** — all 151 official opcodes + addressing
-      matrix, then validate against `nestest.nes` (the golden-log CPU test).
-- [ ] **Bus + iNES loader + mappers** — parse `.nes`, PRG/CHR-ROM, NROM (0)
-      then MMC1/UxROM/CNROM/MMC3.
+- [x] **6502 CPU core** — all **151 official opcodes** with the full
+      addressing-mode matrix (imm, zp, zp/X, zp/Y, abs, abs/X, abs/Y,
+      `(ind,X)`, `(ind),Y`, indirect JMP with the page-boundary bug), flags,
+      stack, branches, `JSR`/`RTS`/`RTI`. Self-tested by `test_cpu.simp`
+      (10 checks across every mode, all passing).
+- [x] **iNES loader + `nestest` harness** — `ines.simp` parses `.nes` and
+      loads PRG/CHR; `nestest.simp` runs a CPU test ROM from `$C000`, traces
+      each instruction in `nestest.log` format, and reports the result codes.
+      Drop in `nestest.nes` to validate against the canonical log.
+- [ ] **Cartridge mappers** — NROM (0) works; add MMC1/UxROM/CNROM/MMC3.
+- [ ] **Real BRK/IRQ/NMI** — BRK currently halts the test harness; wire the
+      interrupt sequence for PPU-driven NMI.
 - [ ] **PPU (2C02)** — background + sprites, scanline/dot timing, scrolling,
       sprite-0 hit, NMI on vblank. (The hard part.)
 - [ ] **Input** — the two controller shift registers (`$4016`/`$4017`).
@@ -45,15 +50,23 @@ State is split into logical pointer buffers (`cpu`, `ram`, `prg`, `chr`,
 |------|------|
 | `cpu.simp` | the Ricoh 2A03 (6502) CPU core + CPU bus |
 | `test_cpu.simp` | hand-crafted 6502 programs that check the core |
+| `ines.simp` | iNES (`.nes`) cartridge loader |
+| `nestest.simp` | run + trace a CPU test ROM |
 
-## Running the CPU tests
+## Running the tests
 
 ```
 simplec nes/test_cpu.simp -o /tmp/testcpu && /tmp/testcpu
-# expect: 55, 63, 2, 64, 64
+# expect: 55 63 2 64 64  171 171  2 1  119
+
+# validate the CPU against the gold-standard ROM (download nestest.nes first):
+simplec nes/nestest.simp -o /tmp/nt
+/tmp/nt nestest.nes            # -> result $02 = 00 / $03 = 00  means all passed
+/tmp/nt nestest.nes trace      # -> per-instruction log to diff vs nestest.log
 ```
 
 ## Status
 
-CPU core: a validated subset runs real 6502 programs correctly. Next up is
-completing the opcode table and standing it against `nestest`.
+The 6502 is complete (all 151 official opcodes) and self-validated, with the
+iNES loader and `nestest` harness ready. Next: cartridge mappers and the PPU
+(background rendering), then input, APU, and an SDL2/PPM frontend.

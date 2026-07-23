@@ -6,6 +6,10 @@
 // language repo's issue #13 for the optimization that would let this be safe.
 //
 // CPU state buffer layout (8 bytes): [0]A [1]X [2]Y [3]SP [4]P [5,6]PC(le).
+//
+// This is the full set of 151 official opcodes with all addressing modes.
+// Addressing-mode helpers resolve the effective address (advancing PC), so
+// each opcode is one line: resolve the address, apply the operation.
 
 extern fn malloc(size: u64) -> *u8;
 
@@ -35,8 +39,7 @@ fn setP(c: *u8, v: int) { wr(c, 4, v); }
 fn getPC(c: *u8) -> int { return rd16(c, 5); }
 fn setPC(c: *u8, v: int) { wr16(c, 5, v & 0xFFFF); }
 
-// ---- status flags (bit positions in P) ------------------------------------
-// 0=C 1=Z 2=I 3=D 4=B 5=U(1) 6=V 7=N
+// ---- status flags (bit positions in P): 0=C 1=Z 2=I 3=D 4=B 5=U 6=V 7=N ----
 fn getf(c: *u8, bit: int) -> bool { return ((getP(c) >> bit) & 1) == 1; }
 fn setf(c: *u8, bit: int, on: bool) {
     let p = getP(c);
@@ -48,9 +51,7 @@ fn setZN(c: *u8, v: int) {
     setf(c, 7, (v & 0x80) != 0);       // Negative
 }
 
-// ---- the CPU bus: RAM (2KB, mirrored) + PRG-ROM (NROM mapper 0) ------------
-// PPU/APU/mapper wiring arrives with those units; for now writes above RAM are
-// swallowed and reads return open-bus 0.
+// ---- CPU bus: RAM (2KB, mirrored) + PRG-ROM (NROM mapper 0) ----------------
 fn busrd(ram: *u8, prg: *u8, prgsz: int, addr: int) -> int {
     let a = addr & 0xFFFF;
     if (a < 0x2000) { return rd(ram, a & 0x07FF); }
@@ -59,20 +60,37 @@ fn busrd(ram: *u8, prg: *u8, prgsz: int, addr: int) -> int {
         if (prgsz == 0x4000) { return rd(prg, off & 0x3FFF); }   // 16KB, mirrored
         return rd(prg, off);                                     // 32KB
     }
-    return 0;
+    return 0;                                                    // PPU/APU: later
 }
 fn buswr(ram: *u8, addr: int, v: int) {
     let a = addr & 0xFFFF;
     if (a < 0x2000) { wr(ram, a & 0x07FF, v); }
-    // else: PPU/APU/cart — wired in later units
 }
 
-// pull the next byte at PC and advance PC (for opcode and operand bytes)
+// pull the next byte at PC and advance PC
 fn fetch(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
     let pc = getPC(c);
-    let b = busrd(ram, prg, prgsz, pc);
     setPC(c, pc + 1);
-    return b;
+    return busrd(ram, prg, prgsz, pc);
+}
+
+// ---- addressing modes: resolve the effective address (advancing PC) --------
+// For immediate, the "address" is the PC location of the operand byte.
+fn m_imm(c: *u8, r: *u8, p: *u8, s: int) -> int { let a = getPC(c); setPC(c, a + 1); return a; }
+fn m_zp(c: *u8, r: *u8, p: *u8, s: int) -> int { return fetch(c, r, p, s); }
+fn m_zpx(c: *u8, r: *u8, p: *u8, s: int) -> int { return (fetch(c, r, p, s) + getX(c)) & 0xFF; }
+fn m_zpy(c: *u8, r: *u8, p: *u8, s: int) -> int { return (fetch(c, r, p, s) + getY(c)) & 0xFF; }
+fn m_abs(c: *u8, r: *u8, p: *u8, s: int) -> int { let lo = fetch(c, r, p, s); let hi = fetch(c, r, p, s); return lo | (hi << 8); }
+fn m_abx(c: *u8, r: *u8, p: *u8, s: int) -> int { let lo = fetch(c, r, p, s); let hi = fetch(c, r, p, s); return ((lo | (hi << 8)) + getX(c)) & 0xFFFF; }
+fn m_aby(c: *u8, r: *u8, p: *u8, s: int) -> int { let lo = fetch(c, r, p, s); let hi = fetch(c, r, p, s); return ((lo | (hi << 8)) + getY(c)) & 0xFFFF; }
+fn m_izx(c: *u8, r: *u8, p: *u8, s: int) -> int {
+    let z = (fetch(c, r, p, s) + getX(c)) & 0xFF;
+    return busrd(r, p, s, z) | (busrd(r, p, s, (z + 1) & 0xFF) << 8);
+}
+fn m_izy(c: *u8, r: *u8, p: *u8, s: int) -> int {
+    let z = fetch(c, r, p, s);
+    let base = busrd(r, p, s, z) | (busrd(r, p, s, (z + 1) & 0xFF) << 8);
+    return (base + getY(c)) & 0xFFFF;
 }
 
 // ---- stack (page 0x0100) ---------------------------------------------------
@@ -85,51 +103,75 @@ fn spull(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
     return busrd(ram, prg, prgsz, 0x0100 + getSP(c));
 }
 
-// ---- arithmetic core (shared by ADC/SBC) ----------------------------------
+// ---- operation helpers -----------------------------------------------------
 fn adc(c: *u8, val: int) {
     let a = getA(c);
-    let carry = 0;
-    let cin = carry;
-    let ci = 0;
-    let cc = getf(c, 0);
     let addend = val & 0xFF;
     let mut sum = a + addend;
-    if (cc) { sum = sum + 1; }
-    setf(c, 0, sum > 0xFF);                                     // Carry out
+    if (getf(c, 0)) { sum = sum + 1; }
+    setf(c, 0, sum > 0xFF);                                       // Carry out
     let res = sum & 0xFF;
-    // Overflow: operands share sign, result differs
-    setf(c, 6, (((a ^ res) & (addend ^ res)) & 0x80) != 0);
+    setf(c, 6, (((a ^ res) & (addend ^ res)) & 0x80) != 0);       // Overflow
     setA(c, res);
     setZN(c, res);
 }
+fn cmp_(c: *u8, reg: int, v: int) { setf(c, 0, reg >= v); setZN(c, (reg - v) & 0xFF); }
+fn bit_(c: *u8, v: int) {
+    setf(c, 1, (getA(c) & v) == 0);
+    setf(c, 7, (v & 0x80) != 0);
+    setf(c, 6, (v & 0x40) != 0);
+}
+fn op_asl(c: *u8, v: int) -> int { setf(c, 0, (v & 0x80) != 0); let r = (v << 1) & 0xFF; setZN(c, r); return r; }
+fn op_lsr(c: *u8, v: int) -> int { setf(c, 0, (v & 1) != 0); let r = v >> 1; setZN(c, r); return r; }
+fn op_rol(c: *u8, v: int) -> int { let oc = getf(c, 0); setf(c, 0, (v & 0x80) != 0); let mut r = (v << 1) & 0xFF; if (oc) { r = r | 1; } setZN(c, r); return r; }
+fn op_ror(c: *u8, v: int) -> int { let oc = getf(c, 0); setf(c, 0, (v & 1) != 0); let mut r = v >> 1; if (oc) { r = r | 0x80; } setZN(c, r); return r; }
 
-// signed 8-bit relative offset for branches
-fn rel8(b: int) -> int { if (b < 0x80) { return b; } return b - 256; }
+fn branch(c: *u8, r: *u8, p: *u8, s: int, take: bool) {
+    let o = fetch(c, r, p, s);
+    let off = o - (256 * ((o >> 7) & 1));       // signed 8-bit
+    if (take) { setPC(c, (getPC(c) + off) & 0xFFFF); }
+}
 
-// ---- one instruction. Returns the opcode (0x00 = BRK, used to halt tests). --
+// ---- one instruction. Returns the opcode (0x00 = BRK, halts test harness). -
 fn step(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
     let op = fetch(c, ram, prg, prgsz);
 
-    // ---- loads ----
-    if (op == 0xA9) { setA(c, fetch(c, ram, prg, prgsz)); setZN(c, getA(c)); return op; } // LDA #
-    if (op == 0xA5) { let a = fetch(c, ram, prg, prgsz); setA(c, busrd(ram, prg, prgsz, a)); setZN(c, getA(c)); return op; } // LDA zp
-    if (op == 0xAD) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); setA(c, busrd(ram, prg, prgsz, lo | (hi << 8))); setZN(c, getA(c)); return op; } // LDA abs
-    if (op == 0xB5) { let a = (fetch(c, ram, prg, prgsz) + getX(c)) & 0xFF; setA(c, busrd(ram, prg, prgsz, a)); setZN(c, getA(c)); return op; } // LDA zp,X
-    if (op == 0xA2) { setX(c, fetch(c, ram, prg, prgsz)); setZN(c, getX(c)); return op; } // LDX #
-    if (op == 0xA6) { let a = fetch(c, ram, prg, prgsz); setX(c, busrd(ram, prg, prgsz, a)); setZN(c, getX(c)); return op; } // LDX zp
-    if (op == 0xAE) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); setX(c, busrd(ram, prg, prgsz, lo | (hi << 8))); setZN(c, getX(c)); return op; } // LDX abs
-    if (op == 0xA0) { setY(c, fetch(c, ram, prg, prgsz)); setZN(c, getY(c)); return op; } // LDY #
-    if (op == 0xA4) { let a = fetch(c, ram, prg, prgsz); setY(c, busrd(ram, prg, prgsz, a)); setZN(c, getY(c)); return op; } // LDY zp
-    if (op == 0xAC) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); setY(c, busrd(ram, prg, prgsz, lo | (hi << 8))); setZN(c, getY(c)); return op; } // LDY abs
+    // ---- LDA (all modes) ----
+    if (op == 0xA9) { let v = busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz)); setA(c, v); setZN(c, v); return op; }
+    if (op == 0xA5) { let v = busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz));  setA(c, v); setZN(c, v); return op; }
+    if (op == 0xB5) { let v = busrd(ram, prg, prgsz, m_zpx(c, ram, prg, prgsz)); setA(c, v); setZN(c, v); return op; }
+    if (op == 0xAD) { let v = busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz)); setA(c, v); setZN(c, v); return op; }
+    if (op == 0xBD) { let v = busrd(ram, prg, prgsz, m_abx(c, ram, prg, prgsz)); setA(c, v); setZN(c, v); return op; }
+    if (op == 0xB9) { let v = busrd(ram, prg, prgsz, m_aby(c, ram, prg, prgsz)); setA(c, v); setZN(c, v); return op; }
+    if (op == 0xA1) { let v = busrd(ram, prg, prgsz, m_izx(c, ram, prg, prgsz)); setA(c, v); setZN(c, v); return op; }
+    if (op == 0xB1) { let v = busrd(ram, prg, prgsz, m_izy(c, ram, prg, prgsz)); setA(c, v); setZN(c, v); return op; }
+    // ---- LDX ----
+    if (op == 0xA2) { let v = busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz)); setX(c, v); setZN(c, v); return op; }
+    if (op == 0xA6) { let v = busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz));  setX(c, v); setZN(c, v); return op; }
+    if (op == 0xB6) { let v = busrd(ram, prg, prgsz, m_zpy(c, ram, prg, prgsz)); setX(c, v); setZN(c, v); return op; }
+    if (op == 0xAE) { let v = busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz)); setX(c, v); setZN(c, v); return op; }
+    if (op == 0xBE) { let v = busrd(ram, prg, prgsz, m_aby(c, ram, prg, prgsz)); setX(c, v); setZN(c, v); return op; }
+    // ---- LDY ----
+    if (op == 0xA0) { let v = busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz)); setY(c, v); setZN(c, v); return op; }
+    if (op == 0xA4) { let v = busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz));  setY(c, v); setZN(c, v); return op; }
+    if (op == 0xB4) { let v = busrd(ram, prg, prgsz, m_zpx(c, ram, prg, prgsz)); setY(c, v); setZN(c, v); return op; }
+    if (op == 0xAC) { let v = busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz)); setY(c, v); setZN(c, v); return op; }
+    if (op == 0xBC) { let v = busrd(ram, prg, prgsz, m_abx(c, ram, prg, prgsz)); setY(c, v); setZN(c, v); return op; }
 
-    // ---- stores ----
-    if (op == 0x85) { let a = fetch(c, ram, prg, prgsz); buswr(ram, a, getA(c)); return op; } // STA zp
-    if (op == 0x8D) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); buswr(ram, lo | (hi << 8), getA(c)); return op; } // STA abs
-    if (op == 0x95) { let a = (fetch(c, ram, prg, prgsz) + getX(c)) & 0xFF; buswr(ram, a, getA(c)); return op; } // STA zp,X
-    if (op == 0x86) { let a = fetch(c, ram, prg, prgsz); buswr(ram, a, getX(c)); return op; } // STX zp
-    if (op == 0x8E) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); buswr(ram, lo | (hi << 8), getX(c)); return op; } // STX abs
-    if (op == 0x84) { let a = fetch(c, ram, prg, prgsz); buswr(ram, a, getY(c)); return op; } // STY zp
-    if (op == 0x8C) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); buswr(ram, lo | (hi << 8), getY(c)); return op; } // STY abs
+    // ---- STA / STX / STY ----
+    if (op == 0x85) { buswr(ram, m_zp(c, ram, prg, prgsz),  getA(c)); return op; }
+    if (op == 0x95) { buswr(ram, m_zpx(c, ram, prg, prgsz), getA(c)); return op; }
+    if (op == 0x8D) { buswr(ram, m_abs(c, ram, prg, prgsz), getA(c)); return op; }
+    if (op == 0x9D) { buswr(ram, m_abx(c, ram, prg, prgsz), getA(c)); return op; }
+    if (op == 0x99) { buswr(ram, m_aby(c, ram, prg, prgsz), getA(c)); return op; }
+    if (op == 0x81) { buswr(ram, m_izx(c, ram, prg, prgsz), getA(c)); return op; }
+    if (op == 0x91) { buswr(ram, m_izy(c, ram, prg, prgsz), getA(c)); return op; }
+    if (op == 0x86) { buswr(ram, m_zp(c, ram, prg, prgsz),  getX(c)); return op; }
+    if (op == 0x96) { buswr(ram, m_zpy(c, ram, prg, prgsz), getX(c)); return op; }
+    if (op == 0x8E) { buswr(ram, m_abs(c, ram, prg, prgsz), getX(c)); return op; }
+    if (op == 0x84) { buswr(ram, m_zp(c, ram, prg, prgsz),  getY(c)); return op; }
+    if (op == 0x94) { buswr(ram, m_zpx(c, ram, prg, prgsz), getY(c)); return op; }
+    if (op == 0x8C) { buswr(ram, m_abs(c, ram, prg, prgsz), getY(c)); return op; }
 
     // ---- transfers ----
     if (op == 0xAA) { setX(c, getA(c)); setZN(c, getX(c)); return op; } // TAX
@@ -139,45 +181,126 @@ fn step(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
     if (op == 0xBA) { setX(c, getSP(c)); setZN(c, getX(c)); return op; } // TSX
     if (op == 0x9A) { setSP(c, getX(c)); return op; }                    // TXS
 
-    // ---- inc / dec ----
+    // ---- AND / ORA / EOR (all modes) ----
+    if (op == 0x29) { setA(c, getA(c) & busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x25) { setA(c, getA(c) & busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz)));  setZN(c, getA(c)); return op; }
+    if (op == 0x35) { setA(c, getA(c) & busrd(ram, prg, prgsz, m_zpx(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x2D) { setA(c, getA(c) & busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x3D) { setA(c, getA(c) & busrd(ram, prg, prgsz, m_abx(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x39) { setA(c, getA(c) & busrd(ram, prg, prgsz, m_aby(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x21) { setA(c, getA(c) & busrd(ram, prg, prgsz, m_izx(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x31) { setA(c, getA(c) & busrd(ram, prg, prgsz, m_izy(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x09) { setA(c, getA(c) | busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x05) { setA(c, getA(c) | busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz)));  setZN(c, getA(c)); return op; }
+    if (op == 0x15) { setA(c, getA(c) | busrd(ram, prg, prgsz, m_zpx(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x0D) { setA(c, getA(c) | busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x1D) { setA(c, getA(c) | busrd(ram, prg, prgsz, m_abx(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x19) { setA(c, getA(c) | busrd(ram, prg, prgsz, m_aby(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x01) { setA(c, getA(c) | busrd(ram, prg, prgsz, m_izx(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x11) { setA(c, getA(c) | busrd(ram, prg, prgsz, m_izy(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x49) { setA(c, getA(c) ^ busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x45) { setA(c, getA(c) ^ busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz)));  setZN(c, getA(c)); return op; }
+    if (op == 0x55) { setA(c, getA(c) ^ busrd(ram, prg, prgsz, m_zpx(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x4D) { setA(c, getA(c) ^ busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x5D) { setA(c, getA(c) ^ busrd(ram, prg, prgsz, m_abx(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x59) { setA(c, getA(c) ^ busrd(ram, prg, prgsz, m_aby(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x41) { setA(c, getA(c) ^ busrd(ram, prg, prgsz, m_izx(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+    if (op == 0x51) { setA(c, getA(c) ^ busrd(ram, prg, prgsz, m_izy(c, ram, prg, prgsz))); setZN(c, getA(c)); return op; }
+
+    // ---- BIT ----
+    if (op == 0x24) { bit_(c, busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz)));  return op; }
+    if (op == 0x2C) { bit_(c, busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz))); return op; }
+
+    // ---- ADC / SBC (all modes; SBC = ADC of one's complement) ----
+    if (op == 0x69) { adc(c, busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz))); return op; }
+    if (op == 0x65) { adc(c, busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz)));  return op; }
+    if (op == 0x75) { adc(c, busrd(ram, prg, prgsz, m_zpx(c, ram, prg, prgsz))); return op; }
+    if (op == 0x6D) { adc(c, busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz))); return op; }
+    if (op == 0x7D) { adc(c, busrd(ram, prg, prgsz, m_abx(c, ram, prg, prgsz))); return op; }
+    if (op == 0x79) { adc(c, busrd(ram, prg, prgsz, m_aby(c, ram, prg, prgsz))); return op; }
+    if (op == 0x61) { adc(c, busrd(ram, prg, prgsz, m_izx(c, ram, prg, prgsz))); return op; }
+    if (op == 0x71) { adc(c, busrd(ram, prg, prgsz, m_izy(c, ram, prg, prgsz))); return op; }
+    if (op == 0xE9) { adc(c, busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz)) ^ 0xFF); return op; }
+    if (op == 0xE5) { adc(c, busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz))  ^ 0xFF); return op; }
+    if (op == 0xF5) { adc(c, busrd(ram, prg, prgsz, m_zpx(c, ram, prg, prgsz)) ^ 0xFF); return op; }
+    if (op == 0xED) { adc(c, busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz)) ^ 0xFF); return op; }
+    if (op == 0xFD) { adc(c, busrd(ram, prg, prgsz, m_abx(c, ram, prg, prgsz)) ^ 0xFF); return op; }
+    if (op == 0xF9) { adc(c, busrd(ram, prg, prgsz, m_aby(c, ram, prg, prgsz)) ^ 0xFF); return op; }
+    if (op == 0xE1) { adc(c, busrd(ram, prg, prgsz, m_izx(c, ram, prg, prgsz)) ^ 0xFF); return op; }
+    if (op == 0xF1) { adc(c, busrd(ram, prg, prgsz, m_izy(c, ram, prg, prgsz)) ^ 0xFF); return op; }
+
+    // ---- CMP / CPX / CPY ----
+    if (op == 0xC9) { cmp_(c, getA(c), busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz))); return op; }
+    if (op == 0xC5) { cmp_(c, getA(c), busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz)));  return op; }
+    if (op == 0xD5) { cmp_(c, getA(c), busrd(ram, prg, prgsz, m_zpx(c, ram, prg, prgsz))); return op; }
+    if (op == 0xCD) { cmp_(c, getA(c), busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz))); return op; }
+    if (op == 0xDD) { cmp_(c, getA(c), busrd(ram, prg, prgsz, m_abx(c, ram, prg, prgsz))); return op; }
+    if (op == 0xD9) { cmp_(c, getA(c), busrd(ram, prg, prgsz, m_aby(c, ram, prg, prgsz))); return op; }
+    if (op == 0xC1) { cmp_(c, getA(c), busrd(ram, prg, prgsz, m_izx(c, ram, prg, prgsz))); return op; }
+    if (op == 0xD1) { cmp_(c, getA(c), busrd(ram, prg, prgsz, m_izy(c, ram, prg, prgsz))); return op; }
+    if (op == 0xE0) { cmp_(c, getX(c), busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz))); return op; }
+    if (op == 0xE4) { cmp_(c, getX(c), busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz)));  return op; }
+    if (op == 0xEC) { cmp_(c, getX(c), busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz))); return op; }
+    if (op == 0xC0) { cmp_(c, getY(c), busrd(ram, prg, prgsz, m_imm(c, ram, prg, prgsz))); return op; }
+    if (op == 0xC4) { cmp_(c, getY(c), busrd(ram, prg, prgsz, m_zp(c, ram, prg, prgsz)));  return op; }
+    if (op == 0xCC) { cmp_(c, getY(c), busrd(ram, prg, prgsz, m_abs(c, ram, prg, prgsz))); return op; }
+
+    // ---- INC / DEC memory ----
+    if (op == 0xE6) { let a = m_zp(c, ram, prg, prgsz);  let v = (busrd(ram, prg, prgsz, a) + 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; }
+    if (op == 0xF6) { let a = m_zpx(c, ram, prg, prgsz); let v = (busrd(ram, prg, prgsz, a) + 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; }
+    if (op == 0xEE) { let a = m_abs(c, ram, prg, prgsz); let v = (busrd(ram, prg, prgsz, a) + 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; }
+    if (op == 0xFE) { let a = m_abx(c, ram, prg, prgsz); let v = (busrd(ram, prg, prgsz, a) + 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; }
+    if (op == 0xC6) { let a = m_zp(c, ram, prg, prgsz);  let v = (busrd(ram, prg, prgsz, a) - 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; }
+    if (op == 0xD6) { let a = m_zpx(c, ram, prg, prgsz); let v = (busrd(ram, prg, prgsz, a) - 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; }
+    if (op == 0xCE) { let a = m_abs(c, ram, prg, prgsz); let v = (busrd(ram, prg, prgsz, a) - 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; }
+    if (op == 0xDE) { let a = m_abx(c, ram, prg, prgsz); let v = (busrd(ram, prg, prgsz, a) - 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; }
     if (op == 0xE8) { setX(c, (getX(c) + 1) & 0xFF); setZN(c, getX(c)); return op; } // INX
     if (op == 0xCA) { setX(c, (getX(c) - 1) & 0xFF); setZN(c, getX(c)); return op; } // DEX
     if (op == 0xC8) { setY(c, (getY(c) + 1) & 0xFF); setZN(c, getY(c)); return op; } // INY
     if (op == 0x88) { setY(c, (getY(c) - 1) & 0xFF); setZN(c, getY(c)); return op; } // DEY
-    if (op == 0xE6) { let a = fetch(c, ram, prg, prgsz); let v = (busrd(ram, prg, prgsz, a) + 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; } // INC zp
-    if (op == 0xC6) { let a = fetch(c, ram, prg, prgsz); let v = (busrd(ram, prg, prgsz, a) - 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; } // DEC zp
 
-    // ---- arithmetic ----
-    if (op == 0x69) { adc(c, fetch(c, ram, prg, prgsz)); return op; } // ADC #
-    if (op == 0x65) { let a = fetch(c, ram, prg, prgsz); adc(c, busrd(ram, prg, prgsz, a)); return op; } // ADC zp
-    if (op == 0x6D) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); adc(c, busrd(ram, prg, prgsz, lo | (hi << 8))); return op; } // ADC abs
-    if (op == 0xE9) { adc(c, fetch(c, ram, prg, prgsz) ^ 0xFF); return op; } // SBC #
-    if (op == 0xE5) { let a = fetch(c, ram, prg, prgsz); adc(c, busrd(ram, prg, prgsz, a) ^ 0xFF); return op; } // SBC zp
-
-    // ---- compares ----
-    if (op == 0xC9) { let v = fetch(c, ram, prg, prgsz); let t = getA(c) - v; setf(c, 0, getA(c) >= v); setZN(c, t & 0xFF); return op; } // CMP #
-    if (op == 0xC5) { let a = fetch(c, ram, prg, prgsz); let v = busrd(ram, prg, prgsz, a); let t = getA(c) - v; setf(c, 0, getA(c) >= v); setZN(c, t & 0xFF); return op; } // CMP zp
-    if (op == 0xE0) { let v = fetch(c, ram, prg, prgsz); let t = getX(c) - v; setf(c, 0, getX(c) >= v); setZN(c, t & 0xFF); return op; } // CPX #
-    if (op == 0xC0) { let v = fetch(c, ram, prg, prgsz); let t = getY(c) - v; setf(c, 0, getY(c) >= v); setZN(c, t & 0xFF); return op; } // CPY #
-
-    // ---- logic ----
-    if (op == 0x29) { setA(c, getA(c) & fetch(c, ram, prg, prgsz)); setZN(c, getA(c)); return op; } // AND #
-    if (op == 0x09) { setA(c, getA(c) | fetch(c, ram, prg, prgsz)); setZN(c, getA(c)); return op; } // ORA #
-    if (op == 0x49) { setA(c, getA(c) ^ fetch(c, ram, prg, prgsz)); setZN(c, getA(c)); return op; } // EOR #
+    // ---- shifts / rotates (accumulator + memory) ----
+    if (op == 0x0A) { setA(c, op_asl(c, getA(c))); return op; }
+    if (op == 0x06) { let a = m_zp(c, ram, prg, prgsz);  buswr(ram, a, op_asl(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x16) { let a = m_zpx(c, ram, prg, prgsz); buswr(ram, a, op_asl(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x0E) { let a = m_abs(c, ram, prg, prgsz); buswr(ram, a, op_asl(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x1E) { let a = m_abx(c, ram, prg, prgsz); buswr(ram, a, op_asl(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x4A) { setA(c, op_lsr(c, getA(c))); return op; }
+    if (op == 0x46) { let a = m_zp(c, ram, prg, prgsz);  buswr(ram, a, op_lsr(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x56) { let a = m_zpx(c, ram, prg, prgsz); buswr(ram, a, op_lsr(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x4E) { let a = m_abs(c, ram, prg, prgsz); buswr(ram, a, op_lsr(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x5E) { let a = m_abx(c, ram, prg, prgsz); buswr(ram, a, op_lsr(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x2A) { setA(c, op_rol(c, getA(c))); return op; }
+    if (op == 0x26) { let a = m_zp(c, ram, prg, prgsz);  buswr(ram, a, op_rol(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x36) { let a = m_zpx(c, ram, prg, prgsz); buswr(ram, a, op_rol(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x2E) { let a = m_abs(c, ram, prg, prgsz); buswr(ram, a, op_rol(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x3E) { let a = m_abx(c, ram, prg, prgsz); buswr(ram, a, op_rol(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x6A) { setA(c, op_ror(c, getA(c))); return op; }
+    if (op == 0x66) { let a = m_zp(c, ram, prg, prgsz);  buswr(ram, a, op_ror(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x76) { let a = m_zpx(c, ram, prg, prgsz); buswr(ram, a, op_ror(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x6E) { let a = m_abs(c, ram, prg, prgsz); buswr(ram, a, op_ror(c, busrd(ram, prg, prgsz, a))); return op; }
+    if (op == 0x7E) { let a = m_abx(c, ram, prg, prgsz); buswr(ram, a, op_ror(c, busrd(ram, prg, prgsz, a))); return op; }
 
     // ---- branches ----
-    if (op == 0x10) { let o = rel8(fetch(c, ram, prg, prgsz)); if (!getf(c, 7)) { setPC(c, getPC(c) + o); } return op; } // BPL
-    if (op == 0x30) { let o = rel8(fetch(c, ram, prg, prgsz)); if (getf(c, 7))  { setPC(c, getPC(c) + o); } return op; } // BMI
-    if (op == 0x50) { let o = rel8(fetch(c, ram, prg, prgsz)); if (!getf(c, 6)) { setPC(c, getPC(c) + o); } return op; } // BVC
-    if (op == 0x70) { let o = rel8(fetch(c, ram, prg, prgsz)); if (getf(c, 6))  { setPC(c, getPC(c) + o); } return op; } // BVS
-    if (op == 0x90) { let o = rel8(fetch(c, ram, prg, prgsz)); if (!getf(c, 0)) { setPC(c, getPC(c) + o); } return op; } // BCC
-    if (op == 0xB0) { let o = rel8(fetch(c, ram, prg, prgsz)); if (getf(c, 0))  { setPC(c, getPC(c) + o); } return op; } // BCS
-    if (op == 0xD0) { let o = rel8(fetch(c, ram, prg, prgsz)); if (!getf(c, 1)) { setPC(c, getPC(c) + o); } return op; } // BNE
-    if (op == 0xF0) { let o = rel8(fetch(c, ram, prg, prgsz)); if (getf(c, 1))  { setPC(c, getPC(c) + o); } return op; } // BEQ
+    if (op == 0x10) { branch(c, ram, prg, prgsz, !getf(c, 7)); return op; } // BPL
+    if (op == 0x30) { branch(c, ram, prg, prgsz, getf(c, 7));  return op; } // BMI
+    if (op == 0x50) { branch(c, ram, prg, prgsz, !getf(c, 6)); return op; } // BVC
+    if (op == 0x70) { branch(c, ram, prg, prgsz, getf(c, 6));  return op; } // BVS
+    if (op == 0x90) { branch(c, ram, prg, prgsz, !getf(c, 0)); return op; } // BCC
+    if (op == 0xB0) { branch(c, ram, prg, prgsz, getf(c, 0));  return op; } // BCS
+    if (op == 0xD0) { branch(c, ram, prg, prgsz, !getf(c, 1)); return op; } // BNE
+    if (op == 0xF0) { branch(c, ram, prg, prgsz, getf(c, 1));  return op; } // BEQ
 
     // ---- jumps / subroutines ----
-    if (op == 0x4C) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); setPC(c, lo | (hi << 8)); return op; } // JMP abs
-    if (op == 0x20) { // JSR abs
+    if (op == 0x4C) { setPC(c, m_abs(c, ram, prg, prgsz)); return op; } // JMP abs
+    if (op == 0x6C) {                                                  // JMP (ind) — with the page-boundary bug
+        let ptr = m_abs(c, ram, prg, prgsz);
+        let lo = busrd(ram, prg, prgsz, ptr);
+        let hi = busrd(ram, prg, prgsz, (ptr & 0xFF00) | ((ptr + 1) & 0xFF));
+        setPC(c, lo | (hi << 8));
+        return op;
+    }
+    if (op == 0x20) {                                                  // JSR abs
         let lo = fetch(c, ram, prg, prgsz);
         let hi = fetch(c, ram, prg, prgsz);
         let ret = (getPC(c) - 1) & 0xFFFF;
@@ -186,10 +309,18 @@ fn step(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
         setPC(c, lo | (hi << 8));
         return op;
     }
-    if (op == 0x60) { // RTS
+    if (op == 0x60) {                                                  // RTS
         let lo = spull(c, ram, prg, prgsz);
         let hi = spull(c, ram, prg, prgsz);
         setPC(c, ((lo | (hi << 8)) + 1) & 0xFFFF);
+        return op;
+    }
+    if (op == 0x40) {                                                  // RTI
+        let p = spull(c, ram, prg, prgsz);
+        setP(c, (p & 0xEF) | 0x20);
+        let lo = spull(c, ram, prg, prgsz);
+        let hi = spull(c, ram, prg, prgsz);
+        setPC(c, lo | (hi << 8));
         return op;
     }
 
@@ -209,17 +340,16 @@ fn step(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
     if (op == 0xF8) { setf(c, 3, true);  return op; } // SED
 
     if (op == 0xEA) { return op; } // NOP
-    if (op == 0x00) { return op; } // BRK (halts our test harness)
+    if (op == 0x00) { return op; } // BRK (halts our test harness; real IRQ TODO)
 
-    // Unimplemented opcode: report it (as a negative) so tests catch gaps.
-    return 0 - op;
+    return 0 - op; // unimplemented opcode -> report it
 }
 
 // reset: load PC from the reset vector (0xFFFC), set SP/P to power-on values.
 fn reset(c: *u8, ram: *u8, prg: *u8, prgsz: int) {
     setA(c, 0); setX(c, 0); setY(c, 0);
     setSP(c, 0xFD);
-    setP(c, 0x24);                       // I set, U set
+    setP(c, 0x24);
     let lo = busrd(ram, prg, prgsz, 0xFFFC);
     let hi = busrd(ram, prg, prgsz, 0xFFFD);
     setPC(c, lo | (hi << 8));

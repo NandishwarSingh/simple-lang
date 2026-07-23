@@ -1,0 +1,31 @@
+// nes/ines.simp — load an iNES (.nes) cartridge into unsafe PRG/CHR buffers.
+//
+// Header (16 bytes): "NES\x1A", [4]=PRG banks x16KB, [5]=CHR banks x8KB,
+// [6]/[7]=flags (mapper nibbles, mirroring, trainer). Optional 512B trainer,
+// then PRG-ROM, then CHR-ROM.
+import "cpu.simp";
+
+// returns (prg, prgsz, chr, chrsz, mapper). mapper < 0 signals a load error.
+fn load_rom(path: str) -> (*u8, int, *u8, int, int) {
+    let (data, e) = read_file(path);
+    if (e != ok) { return malloc(1), 0, malloc(1), 0, 0 - 1; }
+    let n = len(data);
+    if (n < 16) { return malloc(1), 0, malloc(1), 0, 0 - 2; }
+    if (data[0] != 78 || data[1] != 69 || data[2] != 83 || data[3] != 26) {
+        return malloc(1), 0, malloc(1), 0, 0 - 3;    // not "NES\x1A"
+    }
+    let prgbanks = data[4];
+    let chrbanks = data[5];
+    let flag6 = data[6];
+    let mapper = ((data[7] & 0xF0) | ((flag6 >> 4) & 0x0F)) & 0xFF;
+    let prgsz = prgbanks * 16384;
+    let chrsz = chrbanks * 8192;
+    let mut off = 16;
+    if (((flag6 >> 2) & 1) == 1) { off = off + 512; }   // skip trainer
+
+    let prg = malloc(u64(prgsz));
+    for (i in 0..prgsz) { wr(prg, i, data[off + i]); }
+    let chr = malloc(u64(chrsz + 1));                    // +1: 0-bank ROMs
+    for (i in 0..chrsz) { wr(chr, i, data[off + prgsz + i]); }
+    return prg, prgsz, chr, chrsz, mapper;
+}

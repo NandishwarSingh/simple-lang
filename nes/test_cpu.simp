@@ -67,4 +67,52 @@ fn main() {
     run(cpu, ram, prg, prgsz);
     print(busrd(ram, prg, prgsz, 0x0030));          // 64  ($40)
     print(busrd(ram, prg, prgsz, 0x0031));          // 64  (BEQ taken, LDA #$FF skipped)
+
+    // ---- Test 4: (indirect),Y — write & read $AB through a pointer at $10 ----
+    zero(ram, 2048); zero(prg, 32768);
+    wr(prg, 0x0000, 0xA9); wr(prg, 0x0001, 0x00);   // LDA #0
+    wr(prg, 0x0002, 0x85); wr(prg, 0x0003, 0x10);   // STA $10  ptr lo
+    wr(prg, 0x0004, 0xA9); wr(prg, 0x0005, 0x02);   // LDA #2
+    wr(prg, 0x0006, 0x85); wr(prg, 0x0007, 0x11);   // STA $11  ptr hi -> $0200
+    wr(prg, 0x0008, 0xA0); wr(prg, 0x0009, 0x05);   // LDY #5
+    wr(prg, 0x000A, 0xA9); wr(prg, 0x000B, 0xAB);   // LDA #$AB
+    wr(prg, 0x000C, 0x91); wr(prg, 0x000D, 0x10);   // STA ($10),Y -> $0205
+    wr(prg, 0x000E, 0xA9); wr(prg, 0x000F, 0x00);   // LDA #0
+    wr(prg, 0x0010, 0xB1); wr(prg, 0x0011, 0x10);   // LDA ($10),Y -> A=$AB
+    wr(prg, 0x0012, 0x85); wr(prg, 0x0013, 0x30);   // STA $30
+    wr(prg, 0x0014, 0x00);                          // BRK
+    wr(prg, 0x7FFC, 0x00); wr(prg, 0x7FFD, 0x80);
+    reset(cpu, ram, prg, prgsz);
+    run(cpu, ram, prg, prgsz);
+    print(busrd(ram, prg, prgsz, 0x0030));          // 171 ($AB)
+    print(busrd(ram, prg, prgsz, 0x0205));          // 171 (the pointed-to cell)
+
+    // ---- Test 5: ASL A (with carry out) and ROL A (carry in) ----
+    zero(ram, 2048); zero(prg, 32768);
+    wr(prg, 0x0000, 0xA9); wr(prg, 0x0001, 0x81);   // LDA #$81
+    wr(prg, 0x0002, 0x0A);                          // ASL A -> $02, C=1
+    wr(prg, 0x0003, 0x85); wr(prg, 0x0004, 0x40);   // STA $40
+    wr(prg, 0x0005, 0xA9); wr(prg, 0x0006, 0x00);   // LDA #0
+    wr(prg, 0x0007, 0x2A);                          // ROL A -> (0<<1)|C = 1
+    wr(prg, 0x0008, 0x85); wr(prg, 0x0009, 0x41);   // STA $41
+    wr(prg, 0x000A, 0x00);                          // BRK
+    wr(prg, 0x7FFC, 0x00); wr(prg, 0x7FFD, 0x80);
+    reset(cpu, ram, prg, prgsz);
+    run(cpu, ram, prg, prgsz);
+    print(busrd(ram, prg, prgsz, 0x0040));          // 2
+    print(busrd(ram, prg, prgsz, 0x0041));          // 1
+
+    // ---- Test 6: absolute,X store then load ----
+    zero(ram, 2048); zero(prg, 32768);
+    wr(prg, 0x0000, 0xA2); wr(prg, 0x0001, 0x04);   // LDX #4
+    wr(prg, 0x0002, 0xA9); wr(prg, 0x0003, 0x77);   // LDA #$77
+    wr(prg, 0x0004, 0x9D); wr(prg, 0x0005, 0x00); wr(prg, 0x0006, 0x03); // STA $0300,X -> $0304
+    wr(prg, 0x0007, 0xA9); wr(prg, 0x0008, 0x00);   // LDA #0
+    wr(prg, 0x0009, 0xBD); wr(prg, 0x000A, 0x00); wr(prg, 0x000B, 0x03); // LDA $0300,X -> $77
+    wr(prg, 0x000C, 0x85); wr(prg, 0x000D, 0x50);   // STA $50
+    wr(prg, 0x000E, 0x00);                          // BRK
+    wr(prg, 0x7FFC, 0x00); wr(prg, 0x7FFD, 0x80);
+    reset(cpu, ram, prg, prgsz);
+    run(cpu, ram, prg, prgsz);
+    print(busrd(ram, prg, prgsz, 0x0050));          // 119 ($77)
 }

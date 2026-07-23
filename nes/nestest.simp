@@ -1,0 +1,60 @@
+// nes/nestest.simp — run a .nes CPU test ROM and trace it.
+//
+// Usage:  simplec nes/nestest.simp -o /tmp/nt && /tmp/nt path/to/nestest.nes
+//
+// nestest.nes (the standard 6502 test ROM) runs in "automated" mode from
+// $C000 and writes result codes to $0002 / $0003 — 0x00 in both means every
+// official-opcode test passed. This harness starts at $C000, traces each
+// instruction (PC / opcode / A X Y P SP — the columns to diff against the
+// canonical nestest.log), stops on an unimplemented opcode, and prints the
+// result codes at the end.
+import "cpu.simp";
+import "ines.simp";
+
+fn hex1(n: int) -> str { return substr("0123456789ABCDEF", n & 0xF, (n & 0xF) + 1); }
+fn hex2(n: int) -> str { return hex1((n >> 4) & 0xF) + hex1(n & 0xF); }
+fn hex4(n: int) -> str { return hex2((n >> 8) & 0xFF) + hex2(n & 0xFF); }
+
+fn trace(c: *u8, ram: *u8, prg: *u8, prgsz: int) {
+    let pc = getPC(c);
+    let op = busrd(ram, prg, prgsz, pc);
+    print(hex4(pc) + "  " + hex2(op) + "  A:" + hex2(getA(c)) +
+          " X:" + hex2(getX(c)) + " Y:" + hex2(getY(c)) +
+          " P:" + hex2(getP(c)) + " SP:" + hex2(getSP(c)));
+}
+
+fn main() {
+    let path = arg(1);
+    let (prg, prgsz, chr, chrsz, mapper) = load_rom(path);
+    if (mapper < 0) {
+        print("could not load ROM (bad path or not an iNES file)");
+        exit(1);
+    }
+
+    let cpu = malloc(8);
+    let ram = malloc(2048);
+    for (i in 0..2048) { wr(ram, i, 0); }
+
+    reset(cpu, ram, prg, prgsz);
+    setPC(cpu, 0xC000);          // nestest automated entry point
+    setP(cpu, 0x24);
+    setSP(cpu, 0xFD);
+
+    // trace on if a second arg is present (any value); otherwise silent+result
+    let doTrace = argc() > 2;
+    let mut n = 0;
+    while (n < 9000) {
+        if (doTrace) { trace(cpu, ram, prg, prgsz); }
+        let op = step(cpu, ram, prg, prgsz);
+        if (op < 0) {
+            print("unimplemented opcode " + hex2(0 - op) + " after " + str(n) + " instructions");
+            n = 0 - 1;
+            n = 9000;
+        }
+        n = n + 1;
+    }
+
+    // result codes: 0x00 / 0x00 == all official-opcode tests passed
+    print("result $02 = " + hex2(busrd(ram, prg, prgsz, 0x02)));
+    print("result $03 = " + hex2(busrd(ram, prg, prgsz, 0x03)));
+}
