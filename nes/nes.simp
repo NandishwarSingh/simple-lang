@@ -10,16 +10,7 @@
 import "cpu.simp";
 import "ines.simp";
 import "ppu.simp";
-
-fn run_frame(c: *u8, ram: *u8, prg: *u8, prgsz: int) {
-    // visible: vblank clear
-    wr(ram, 0x0802, rd(ram, 0x0802) & 0x7F);
-    for (i in 0..7000) { step(c, ram, prg, prgsz); }
-    // vblank: set flag, fire NMI if enabled, run the handler + a little more
-    wr(ram, 0x0802, rd(ram, 0x0802) | 0x80);
-    if ((rd(ram, 0x0800) & 0x80) != 0) { nmi(c, ram, prg, prgsz); }
-    for (i in 0..1500) { step(c, ram, prg, prgsz); }
-}
+import "system.simp";
 
 fn main() {
     let (prg, prgsz, chr, chrsz, mapper) = load_rom(arg(1));

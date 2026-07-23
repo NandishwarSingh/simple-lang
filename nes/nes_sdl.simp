@@ -1,0 +1,107 @@
+// nes/nes_sdl.simp — play in a real SDL2 window (256x240 scaled 3x).
+//
+//   brew install sdl2
+//   simplec nes/nes_sdl.simp --link SDL2 --libdir /opt/homebrew/lib -o nesplay
+//   ./nesplay game.nes
+//
+// Controls:  Arrows = D-pad   Z = A   X = B   Enter = Start   Space = Select
+//            Esc = quit
+//
+// Built to the same SDL2 pattern as examples/plasma.simp.
+import "cpu.simp";
+import "ines.simp";
+import "ppu.simp";
+import "system.simp";
+
+extern fn SDL_Init(flags: u32) -> i32;
+extern fn SDL_CreateWindow(title: str, x: i32, y: i32, w: i32, h: i32, flags: u32) -> *u8;
+extern fn SDL_CreateRenderer(win: *u8, index: i32, flags: u32) -> *u8;
+extern fn SDL_CreateTexture(ren: *u8, format: u32, access: i32, w: i32, h: i32) -> *u8;
+extern fn SDL_UpdateTexture(tex: *u8, rect: *u8, pixels: *u8, pitch: i32) -> i32;
+extern fn SDL_RenderClear(ren: *u8) -> i32;
+extern fn SDL_RenderCopy(ren: *u8, tex: *u8, src: *u8, dst: *u8) -> i32;
+extern fn SDL_RenderPresent(ren: *u8);
+extern fn SDL_PollEvent(ev: *u8) -> i32;
+extern fn SDL_Delay(ms: u32);
+extern fn SDL_Quit();
+
+fn argb(r: int, g: int, b: int) -> u32 {
+    return u32(0xFF000000 | (r << 16) | (g << 8) | b);
+}
+
+// SDL scancode -> NES button bit (A=1 B=2 Sel=4 Start=8 Up=16 Down=32 Left=64 Right=128)
+fn btn_bit(sc: int) -> int {
+    if (sc == 82) { return 0x10; }   // Up
+    if (sc == 81) { return 0x20; }   // Down
+    if (sc == 80) { return 0x40; }   // Left
+    if (sc == 79) { return 0x80; }   // Right
+    if (sc == 29) { return 0x01; }   // Z -> A
+    if (sc == 27) { return 0x02; }   // X -> B
+    if (sc == 44) { return 0x04; }   // Space -> Select
+    if (sc == 40) { return 0x08; }   // Enter -> Start
+    return 0;
+}
+
+fn main() {
+    let (prg, prgsz, chr, chrsz, mapper) = load_rom(arg(1));
+    if (mapper < 0) { print("could not load ROM"); exit(1); }
+
+    let ram = malloc(20480);
+    for (i in 0..20480) { wr(ram, i, 0); }
+    for (i in 0..chrsz) { wr(ram, 0x1000 + i, rd(chr, i)); }
+    let cpu = malloc(8);
+    reset(cpu, ram, prg, prgsz);
+    let master = master_palette();
+    let fb = malloc(184320);           // 256*240*3, render target
+
+    if (SDL_Init(0x20) != 0) { print("SDL_Init failed"); exit(1); }
+    let win = SDL_CreateWindow("Simple — NES", i32(0x2FFF0000), i32(0x2FFF0000),
+                               i32(768), i32(720), 0x4);
+    let ren = SDL_CreateRenderer(win, i32(0 - 1), 0x2);
+    let tex = SDL_CreateTexture(ren, 0x16362004, 1, i32(256), i32(240));  // ARGB8888, STREAMING
+    let mut rect: i32[4] = [i32(0), i32(0), i32(256), i32(240)];
+    let mut ev = [u8(0); 64];
+    let mut px = [u32(0); 61440];      // 256*240
+
+    let mut buttons = 0;
+    let mut running = true;
+    while (running) {
+        // ---- input ----
+        let mut polling = true;
+        while (polling) {
+            let mut got = 0;
+            unsafe { got = int(SDL_PollEvent(&ev[0])); }
+            if (got == 0) { polling = false; }
+            else {
+                let mut etype = 0;
+                let mut sc = 0;
+                unsafe {
+                    let tp: *u32 = &ev[0];   etype = int(*tp);
+                    let sp: *u32 = &ev[16];  sc = int(*sp);   // SDL_Keysym.scancode
+                }
+                if (etype == 0x100) { running = false; }                 // SDL_QUIT
+                if (etype == 0x300) {                                    // KEYDOWN
+                    if (sc == 41) { running = false; }                   // Esc
+                    buttons = buttons | btn_bit(sc);
+                }
+                if (etype == 0x301) { buttons = buttons & (255 ^ btn_bit(sc)); } // KEYUP
+            }
+        }
+        set_buttons(ram, buttons);
+
+        // ---- one frame ----
+        run_frame(cpu, ram, prg, prgsz);
+        render_frame(fb, ram, master);
+        for (i in 0..61440) {
+            px[i] = argb(rd(fb, i * 3), rd(fb, i * 3 + 1), rd(fb, i * 3 + 2));
+        }
+
+        // ---- present ----
+        unsafe { SDL_UpdateTexture(tex, &rect[0], &px[0], i32(256 * 4)); }
+        SDL_RenderClear(ren);
+        unsafe { SDL_RenderCopy(ren, tex, null, null); }
+        SDL_RenderPresent(ren);
+        SDL_Delay(16);                  // ~60 fps
+    }
+    SDL_Quit();
+}

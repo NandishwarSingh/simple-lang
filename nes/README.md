@@ -101,6 +101,26 @@ it to run the whole suite, and it displays **"OK" next to all 14 test
 categories** on screen — CPU, PPU rendering, and input all validated together
 by the ROM's own self-tests.
 
-Next: an **SDL2 live window** (real-time display + keyboard → `set_buttons`,
-like `examples/plasma.simp`), cycle-accurate timing so commercial ROMs boot
-cleanly, more **mappers**, and the **APU** for sound.
+## It runs games
+
+**`nes_sdl.simp` is a real SDL2 window** — 60 fps, 3x-scaled, keyboard →
+controller (Arrows = D-pad, Z/X = A/B, Enter/Space = Start/Select):
+
+```
+brew install sdl2
+simplec nes/nes_sdl.simp --link SDL2 --libdir /opt/homebrew/lib -o nesplay
+./nesplay game.nes
+```
+
+Verified headless (rendering frames to PPM) on freely-licensed NROM ROMs:
+
+- **Brad Smith's `example.nes`** boots to a checkerboard scene with a
+  **controllable character** — feeding D-pad input moves the sprite (frame
+  diffs confirm it). A playable NES program running in Simple.
+- **`nestest.nes`** boots its interactive menu and, driven by Start, runs its
+  whole suite to all-OK.
+
+Demanding commercial-grade games (e.g. Shiru's *Alter Ego*) render black — they
+need **cycle-accurate timing**, which the approximate per-frame model doesn't
+provide yet. That's the main remaining upgrade, alongside more **mappers**
+(MMC1/UxROM/MMC3) and the **APU** for sound.

@@ -1,0 +1,15 @@
+// nes/system.simp — advance the machine one frame.
+//
+// Approximate NES timing (per-frame instruction budgets, not cycle-exact): a
+// visible period with the vblank flag clear, then a vblank period with the flag
+// set and an NMI fired if PPUCTRL enables it. Enough for NMI-driven and
+// vblank-polling ROMs; cycle-accurate timing is the upgrade for demanding games.
+import "cpu.simp";
+
+fn run_frame(c: *u8, ram: *u8, prg: *u8, prgsz: int) {
+    wr(ram, 0x0802, rd(ram, 0x0802) & 0x7F);                 // vblank clear
+    for (i in 0..7000) { step(c, ram, prg, prgsz); }         // visible period
+    wr(ram, 0x0802, rd(ram, 0x0802) | 0x80);                 // vblank set
+    if ((rd(ram, 0x0800) & 0x80) != 0) { nmi(c, ram, prg, prgsz); }  // NMI if enabled
+    for (i in 0..1500) { step(c, ram, prg, prgsz); }         // vblank period
+}
