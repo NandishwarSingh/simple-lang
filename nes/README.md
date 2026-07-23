@@ -74,5 +74,11 @@ instructions** — every PC, A, X, Y, P, and SP identical — and the ROM's
 nestest moves on to *unofficial* opcodes. The CPU is instruction- and
 flag-exact.
 
-Next: cartridge mappers and the PPU (tile decoding → background rendering →
-sprites → timing/NMI), then input, APU, and an SDL2/PPM frontend.
+The PPU has its **tile decoder** and **background renderer** working as pure
+functions: `screen.simp` builds a 32x30 nametable and renders a full 256x240
+NES frame (blue background, white font text) through the real nametable →
+pattern-table → palette pipeline.
+
+Next: wire the PPU into the running system — route `$2000`-`$2007` through the
+bus, add real NMI-on-vblank and PPU scanline timing so a game drives the
+screen itself — then sprites, input, APU, and an SDL2/PPM frontend.

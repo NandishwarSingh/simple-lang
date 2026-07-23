@@ -1,0 +1,31 @@
+// nes/screen.simp — demo the background renderer: build a 32x30 nametable from
+// a cartridge's CHR tiles and render a full 256x240 NES frame. Proves the
+// nametable -> pattern-table -> palette -> framebuffer pipeline before the
+// CPU<->PPU timing exists.
+//
+//   simplec nes/screen.simp -o /tmp/screen && /tmp/screen game.nes > screen.ppm
+import "cpu.simp";
+import "ines.simp";
+import "ppu.simp";
+
+fn main() {
+    let (prg, prgsz, chr, chrsz, mapper) = load_rom(arg(1));
+    if (mapper < 0) { print("could not load ROM"); exit(1); }
+    if (chrsz == 0) { print("ROM has no CHR-ROM"); exit(1); }
+
+    // a 4-colour palette: NES-blue background, white ink (nestest's font uses
+    // colour indices 0 and 3), plus cyan/red for tiles that use 1 and 2.
+    let pal = malloc(12);
+    wr(pal, 0, 24);  wr(pal, 1, 32);  wr(pal, 2, 120);   // 0: deep blue
+    wr(pal, 3, 100); wr(pal, 4, 200); wr(pal, 5, 255);   // 1: cyan
+    wr(pal, 6, 240); wr(pal, 7, 80);  wr(pal, 8, 60);    // 2: red
+    wr(pal, 9, 255); wr(pal, 10, 255); wr(pal, 11, 255); // 3: white
+
+    // build a nametable that lays the character set across the screen.
+    let nt = malloc(2048);
+    for (i in 0..960) { wr(nt, i, i & 0xFF); }
+
+    let fb = malloc(184320);              // 256 * 240 * 3
+    render_background(fb, chr, nt, pal);
+    write_ppm(fb);
+}

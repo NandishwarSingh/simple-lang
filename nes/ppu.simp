@@ -12,3 +12,40 @@ fn tile_pixel(chr: *u8, tile: int, row: int, col: int) -> int {
     let bit = 7 - col;
     return (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
 }
+
+// Render a 32x30 tile nametable to a 256x240 RGB framebuffer (fb, 3 bytes per
+// pixel). `nt` holds one tile index per cell; `pal` is four RGB triples (12
+// bytes) — the 4-colour palette the 2-bit indices map through. This is the
+// background path the running PPU will drive; here it is a pure function so it
+// can be tested before the CPU<->PPU timing exists.
+fn render_background(fb: *u8, chr: *u8, nt: *u8, pal: *u8) {
+    for (ty in 0..30) {
+        for (tx in 0..32) {
+            let tile = rd(nt, ty * 32 + tx);
+            for (row in 0..8) {
+                for (col in 0..8) {
+                    let ci = tile_pixel(chr, tile, row, col);
+                    let o = (((ty * 8 + row) * 256) + (tx * 8 + col)) * 3;
+                    wr(fb, o + 0, rd(pal, ci * 3 + 0));
+                    wr(fb, o + 1, rd(pal, ci * 3 + 1));
+                    wr(fb, o + 2, rd(pal, ci * 3 + 2));
+                }
+            }
+        }
+    }
+}
+
+// write a 256x240 RGB framebuffer as a P3 PPM to stdout.
+fn write_ppm(fb: *u8) {
+    print("P3");
+    print("256 240");
+    print("255");
+    for (y in 0..240) {
+        let mut line = "";
+        for (x in 0..256) {
+            let o = (y * 256 + x) * 3;
+            line = line + str(rd(fb, o)) + " " + str(rd(fb, o + 1)) + " " + str(rd(fb, o + 2)) + " ";
+        }
+        print(line);
+    }
+}
