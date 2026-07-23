@@ -28,6 +28,7 @@ hello, world
 
 ## Documentation
 
+- **[AI guide](AI_GUIDE.md)** — a compact, rules-first reference for generating Simple code with an AI assistant (Claude, Cursor, etc.) — drop it into your project's AI context
 - **[The Simple book](docs/book/README.md)** — learn the language from zero (start here)
 - **[Compiler internals](docs/internals/README.md)** — how `simplec` works, stage by stage
 - **[Language spec](docs/spec.md)** — the formal design document and roadmap
@@ -103,14 +104,14 @@ The intermediate files are kept on purpose — read `program.ssa` (QBE IR) and
 
 - types: `int`, sized ints (`i8`–`i64`, `u8`–`u64`), **`float`/`f32`**
   (real IEEE-754), `bool`, `str`, structs, fixed arrays `int[5]`, `list T`,
-  `map[K]V`, channels, raw pointers `*T`
+  `map K V`, channels, raw pointers `*T`
 - **bare metal** — bitwise operators, `unsafe { }` blocks with raw
   pointers and pointer arithmetic, `extern fn` to call any C library
 - **structs** — plain named-field data, nesting, struct returns (no OOP, ever)
 - **arrays** — fixed-size, value semantics, `len()`, **runtime bounds checking**
 - **lists** — `list T`, growable (`push`/`pop`/`len`, indexing); value
   semantics via copy-on-write; hold anything, even other lists; ARC-freed
-- **maps** — `map[K]V` with int or string keys, **insertion-order iteration**,
+- **maps** — `map K V` with int or string keys, **insertion-order iteration**,
   a from-scratch open-addressing table emitted as QBE *(v0.9)*
 - **strings** — `+` concat, O(1) `len()`, `==` **content** compare, `s[i]` byte
   access, `substr`, `str(n)`/`int(s)` conversion, char literals `'A'`;
