@@ -32,7 +32,7 @@ fn main() {
     }
 
     let cpu = malloc(8);
-    let ram = malloc(2048);
+    let ram = malloc(20480);
     for (i in 0..2048) { wr(ram, i, 0); }
 
     reset(cpu, ram, prg, prgsz);

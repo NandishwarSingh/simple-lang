@@ -17,7 +17,7 @@ fn run(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
 
 fn main() {
     let cpu = malloc(8);
-    let ram = malloc(2048);
+    let ram = malloc(20480);
     let prg = malloc(32768);
     let prgsz = 32768;
 

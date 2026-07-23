@@ -1,0 +1,53 @@
+// nes/ppu_test.simp — prove the CPU can drive the PPU end-to-end.
+//
+// A hand-written 6502 program sets PPUADDR ($2006) to the nametable and writes
+// a run of tile indices through PPUDATA ($2007). If the bus wiring works, those
+// writes land in PPU nametable memory; we then render the background from it.
+// CHR comes from a real cartridge so the tiles are recognisable.
+//
+//   simplec nes/ppu_test.simp -o /tmp/pt && /tmp/pt some_rom.nes > out.ppm
+import "cpu.simp";
+import "ines.simp";
+import "ppu.simp";
+
+fn main() {
+    let (romprg, rps, chr, chrsz, mapper) = load_rom(arg(1));
+    if (mapper < 0 || chrsz == 0) { print("need a .nes with CHR-ROM"); exit(1); }
+
+    let ram = malloc(20480);
+    for (i in 0..20480) { wr(ram, i, 0); }
+    for (i in 0..chrsz) { wr(ram, 0x1000 + i, rd(chr, i)); }   // CHR -> PPU pattern memory
+
+    let cpu = malloc(8);
+    let prg = malloc(32768);
+    for (i in 0..32768) { wr(prg, i, 0); }
+
+    // 6502: PPUADDR=$2000, then write A=0,1,2,... to PPUDATA for 4 pages.
+    wr(prg, 0x00, 0xA9); wr(prg, 0x01, 0x20);                      // LDA #$20
+    wr(prg, 0x02, 0x8D); wr(prg, 0x03, 0x06); wr(prg, 0x04, 0x20); // STA $2006 (hi)
+    wr(prg, 0x05, 0xA9); wr(prg, 0x06, 0x00);                      // LDA #$00
+    wr(prg, 0x07, 0x8D); wr(prg, 0x08, 0x06); wr(prg, 0x09, 0x20); // STA $2006 (lo) -> v=$2000
+    wr(prg, 0x0A, 0xA9); wr(prg, 0x0B, 0x00);                      // LDA #0  (tile counter)
+    wr(prg, 0x0C, 0xA2); wr(prg, 0x0D, 0x04);                      // LDX #4  (pages)
+    wr(prg, 0x0E, 0x8D); wr(prg, 0x0F, 0x07); wr(prg, 0x10, 0x20); // STA $2007  [inner]
+    wr(prg, 0x11, 0x18);                                           // CLC
+    wr(prg, 0x12, 0x69); wr(prg, 0x13, 0x01);                      // ADC #1
+    wr(prg, 0x14, 0xD0); wr(prg, 0x15, 0xF8);                      // BNE inner (256x)
+    wr(prg, 0x16, 0xCA);                                           // DEX
+    wr(prg, 0x17, 0xD0); wr(prg, 0x18, 0xF5);                      // BNE inner (next page)
+    wr(prg, 0x19, 0x4C); wr(prg, 0x1A, 0x19); wr(prg, 0x1B, 0x80); // JMP $8019 (halt)
+    wr(prg, 0x7FFC, 0x00); wr(prg, 0x7FFD, 0x80);                  // reset -> $8000
+
+    reset(cpu, ram, prg, 32768);
+    for (i in 0..4000) { step(cpu, ram, prg, 32768); }            // run past the fill
+
+    let pal = malloc(12);
+    wr(pal, 0, 24);  wr(pal, 1, 32);  wr(pal, 2, 120);            // blue bg
+    wr(pal, 3, 100); wr(pal, 4, 200); wr(pal, 5, 255);            // cyan
+    wr(pal, 6, 240); wr(pal, 7, 80);  wr(pal, 8, 60);             // red
+    wr(pal, 9, 255); wr(pal, 10, 255); wr(pal, 11, 255);         // white
+
+    let fb = malloc(184320);
+    render_bg(fb, ram, 0x1000, 0x3000, pal);   // pattern table 0, nametable $2000
+    write_ppm(fb);
+}

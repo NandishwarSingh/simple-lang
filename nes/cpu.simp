@@ -51,20 +51,98 @@ fn setZN(c: *u8, v: int) {
     setf(c, 7, (v & 0x80) != 0);       // Negative
 }
 
-// ---- CPU bus: RAM (2KB, mirrored) + PRG-ROM (NROM mapper 0) ----------------
+// ---- CPU bus: RAM + PPU registers + PRG-ROM (NROM mapper 0) ----------------
+//
+// The `ram` argument is a single machine-memory buffer that also holds PPU
+// state, so no signatures change (the nestest-validated CPU is untouched — it
+// never reads/writes $2000-$3FFF). Layout:
+//   0x0000-0x07FF  CPU RAM (2KB)
+//   0x0800 PPUCTRL 0x0801 PPUMASK 0x0802 PPUSTATUS 0x0803 OAMADDR
+//   0x0804 w(latch) 0x0805 v.lo 0x0806 v.hi 0x0807 read-buffer
+//   0x0808 scrollX 0x0809 scrollY 0x080A nmi-pending
+//   0x0900-0x09FF  OAM
+//   0x1000 + (ppuaddr & 0x3FFF)  PPU memory (pattern tables, nametables, palette)
+fn ppu_vaddr(ram: *u8) -> int { return (rd(ram, 0x0805) | (rd(ram, 0x0806) << 8)) & 0x3FFF; }
+fn ppu_bump(ram: *u8) {
+    let inc = 1;
+    let step = inc + (31 * ((rd(ram, 0x0800) >> 2) & 1));    // +32 if PPUCTRL bit2
+    let nv = (ppu_vaddr(ram) + step) & 0x3FFF;
+    wr(ram, 0x0805, nv & 0xFF); wr(ram, 0x0806, (nv >> 8) & 0xFF);
+}
+
 fn busrd(ram: *u8, prg: *u8, prgsz: int, addr: int) -> int {
     let a = addr & 0xFFFF;
     if (a < 0x2000) { return rd(ram, a & 0x07FF); }
+    if (a < 0x4000) {                                        // PPU registers (mirror /8)
+        let reg = a & 7;
+        if (reg == 2) {                                     // PPUSTATUS: read clears vblank + latch
+            let s = rd(ram, 0x0802);
+            wr(ram, 0x0802, s & 0x7F);
+            wr(ram, 0x0804, 0);
+            return s;
+        }
+        if (reg == 7) {                                     // PPUDATA (buffered outside palette)
+            let pa = ppu_vaddr(ram);
+            let val = rd(ram, 0x1000 + pa);
+            let mut ret = val;
+            if (pa < 0x3F00) { ret = rd(ram, 0x0807); wr(ram, 0x0807, val); }
+            ppu_bump(ram);
+            return ret;
+        }
+        return 0;
+    }
     if (a >= 0x8000) {
         let off = a - 0x8000;
         if (prgsz == 0x4000) { return rd(prg, off & 0x3FFF); }   // 16KB, mirrored
         return rd(prg, off);                                     // 32KB
     }
-    return 0;                                                    // PPU/APU: later
+    return 0;                                                    // APU/IO: later
 }
 fn buswr(ram: *u8, addr: int, v: int) {
     let a = addr & 0xFFFF;
-    if (a < 0x2000) { wr(ram, a & 0x07FF, v); }
+    if (a < 0x2000) { wr(ram, a & 0x07FF, v); return; }
+    if (a < 0x4000) {                                        // PPU registers
+        let reg = a & 7;
+        if (reg == 0) { wr(ram, 0x0800, v); return; }       // PPUCTRL
+        if (reg == 1) { wr(ram, 0x0801, v); return; }       // PPUMASK
+        if (reg == 3) { wr(ram, 0x0803, v); return; }       // OAMADDR
+        if (reg == 4) {                                     // OAMDATA
+            let oa = rd(ram, 0x0803);
+            wr(ram, 0x0900 + oa, v); wr(ram, 0x0803, (oa + 1) & 0xFF); return;
+        }
+        if (reg == 5) {                                     // PPUSCROLL (2 writes)
+            if (rd(ram, 0x0804) == 0) { wr(ram, 0x0808, v); wr(ram, 0x0804, 1); }
+            else { wr(ram, 0x0809, v); wr(ram, 0x0804, 0); }
+            return;
+        }
+        if (reg == 6) {                                     // PPUADDR (high then low)
+            if (rd(ram, 0x0804) == 0) { wr(ram, 0x0806, v & 0x3F); wr(ram, 0x0804, 1); }
+            else { wr(ram, 0x0805, v); wr(ram, 0x0804, 0); }
+            return;
+        }
+        if (reg == 7) {                                     // PPUDATA write
+            wr(ram, 0x1000 + ppu_vaddr(ram), v);
+            ppu_bump(ram);
+            return;
+        }
+        return;
+    }
+    if (a == 0x4014) {                                      // OAM DMA: copy a CPU page into OAM
+        let page = (v << 8) & 0x7FF;
+        for (i in 0..256) { wr(ram, 0x0900 + i, rd(ram, (page + i) & 0x7FF)); }
+        return;
+    }
+}
+
+// Non-maskable interrupt (PPU vblank): push PC and P, jump to the NMI vector.
+fn nmi(c: *u8, ram: *u8, prg: *u8, prgsz: int) {
+    spush(c, ram, (getPC(c) >> 8) & 0xFF);
+    spush(c, ram, getPC(c) & 0xFF);
+    spush(c, ram, (getP(c) & 0xEF) | 0x20);
+    setf(c, 2, true);
+    let lo = busrd(ram, prg, prgsz, 0xFFFA);
+    let hi = busrd(ram, prg, prgsz, 0xFFFB);
+    setPC(c, lo | (hi << 8));
 }
 
 // pull the next byte at PC and advance PC

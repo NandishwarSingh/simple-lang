@@ -35,6 +35,29 @@ fn render_background(fb: *u8, chr: *u8, nt: *u8, pal: *u8) {
     }
 }
 
+// Render the background straight out of the machine-memory buffer `mem` (the
+// running system's RAM+PPU buffer): pattern table at offset `patBase`,
+// nametable at `ntBase`. Used once the CPU has driven the PPU registers.
+fn render_bg(fb: *u8, mem: *u8, patBase: int, ntBase: int, pal: *u8) {
+    for (ty in 0..30) {
+        for (tx in 0..32) {
+            let tbase = patBase + rd(mem, ntBase + ty * 32 + tx) * 16;
+            for (row in 0..8) {
+                let lo = rd(mem, tbase + row);
+                let hi = rd(mem, tbase + 8 + row);
+                for (col in 0..8) {
+                    let bit = 7 - col;
+                    let ci = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
+                    let o = (((ty * 8 + row) * 256) + (tx * 8 + col)) * 3;
+                    wr(fb, o + 0, rd(pal, ci * 3 + 0));
+                    wr(fb, o + 1, rd(pal, ci * 3 + 1));
+                    wr(fb, o + 2, rd(pal, ci * 3 + 2));
+                }
+            }
+        }
+    }
+}
+
 // write a 256x240 RGB framebuffer as a P3 PPM to stdout.
 fn write_ppm(fb: *u8) {
     print("P3");
