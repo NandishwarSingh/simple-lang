@@ -34,6 +34,7 @@ fn main() {
 
     let mut frames = 4;
     if (argc() > 2) { frames = int(arg(2)); }
+    if (argc() > 3) { set_buttons(ram, int(arg(3))); }   // held button mask (A=1 B=2 Sel=4 Start=8 ...)
     for (f in 0..frames) { run_frame(cpu, ram, prg, prgsz); }
 
     let master = master_palette();
