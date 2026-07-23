@@ -47,8 +47,16 @@ BENCHES = {
                 "churn, branchy sort, deep recursion, cache-bound matmul (all integer)",
 }
 
+import os
+# Architecture profile. Default is the native host (arm64 here). Set
+# SIMPLE_LAB_ARCH=amd64 to build every language for x86-64 instead — on Apple
+# silicon those binaries run under Rosetta 2. Because *every* language is
+# translated identically, the vs-C ratios still reflect each compiler's amd64
+# code quality (absolute times carry the shared Rosetta tax).
+ARCH = os.environ.get("SIMPLE_LAB_ARCH", "native")
+
 # lang -> (source extension, build command)
-LANGS = {
+_LANGS_NATIVE = {
     "C": ("c", lambda s, o: ["clang", "-O2", str(s), "-o", str(o)]),
     "C++": ("cpp", lambda s, o: ["clang++", "-O2", str(s), "-o", str(o)]),
     "Rust": ("rs", lambda s, o: ["rustc", "-C", "opt-level=2", "-C", "debuginfo=0",
@@ -59,6 +67,21 @@ LANGS = {
     "Swift": ("swift", lambda s, o: ["swiftc", "-O", str(s), "-o", str(o)]),
     "Simple": ("simp", lambda s, o: [str(ROOT / "simplec"), str(s), "-o", str(o)]),
 }
+_LANGS_AMD64 = {
+    "C": ("c", lambda s, o: ["clang", "-arch", "x86_64", "-O2", str(s), "-o", str(o)]),
+    "C++": ("cpp", lambda s, o: ["clang++", "-arch", "x86_64", "-O2", str(s), "-o", str(o)]),
+    "Rust": ("rs", lambda s, o: ["rustc", "--target", "x86_64-apple-darwin",
+                                 "-C", "opt-level=2", "-C", "debuginfo=0",
+                                 str(s), "-o", str(o)]),
+    "Go": ("go", lambda s, o: ["go", "build", "-o", str(o), str(s)]),  # GOARCH via env
+    "Zig": ("zig", lambda s, o: ["zig", "build-exe", "-target", "x86_64-macos",
+                                 "-OReleaseFast", "-lc", "-femit-bin=" + str(o), str(s)]),
+    "Swift": ("swift", lambda s, o: ["swiftc", "-target", "x86_64-apple-macosx13.0",
+                                     "-O", str(s), "-o", str(o)]),
+    "Simple": ("simp", lambda s, o: [str(ROOT / "simplec"), str(s),
+                                     "--target", "amd64_apple", "-o", str(o)]),
+}
+LANGS = _LANGS_AMD64 if ARCH == "amd64" else _LANGS_NATIVE
 
 
 def sh(cmd, env=None):
@@ -71,8 +94,9 @@ def build(bench, lang):
     out = BUILD / f"{bench}_{ext}"
     env = None
     if lang == "Go":  # keep Go's build cache inside the repo
-        import os
         env = dict(os.environ, GOCACHE=str(BUILD / "gocache"))
+        if ARCH == "amd64":
+            env["GOARCH"] = "amd64"
     t0 = time.monotonic()
     r = sh(cmdf(src, out), env=env)
     dt = time.monotonic() - t0
@@ -137,6 +161,10 @@ def main():
     lines.append("")
     lines.append(f"- date: {date.today().isoformat()}")
     lines.append(f"- machine: {machine()}")
+    if ARCH == "amd64":
+        lines.append("- **target arch: x86-64** — every language built for x86-64 and "
+                     "executed under Rosetta 2; the shared translation tax cancels in "
+                     "the vs-C ratios")
     lines.append(f"- method: median of {RUNS} runs after 1 warmup; "
                  "max RSS via /usr/bin/time -l; identical algorithms, 64-bit ints, -O2-class flags")
     for v in tool_versions():
