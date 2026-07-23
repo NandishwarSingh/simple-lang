@@ -1,0 +1,33 @@
+// nes/tiles.simp — decode a cartridge's CHR pattern tables and write them as a
+// PPM image (the emulator's first pixels). Lays the 512 tiles out 16-wide, so
+// the two 256-tile pattern tables stack into a 128x256 grid. The 2-bit colour
+// index maps to four grays.
+//
+//   simplec nes/tiles.simp -o /tmp/tiles && /tmp/tiles game.nes > tiles.ppm
+import "cpu.simp";
+import "ines.simp";
+import "ppu.simp";
+
+fn main() {
+    let (prg, prgsz, chr, chrsz, mapper) = load_rom(arg(1));
+    if (mapper < 0) { print("could not load ROM"); exit(1); }
+    if (chrsz == 0) { print("ROM has no CHR-ROM to show"); exit(1); }
+
+    let W = 128;                 // 16 tiles across
+    let tiles = chrsz / 16;
+    let H = (tiles / 16) * 8;    // as many 8px rows as needed
+    print("P3");
+    print(str(W) + " " + str(H));
+    print("255");
+    for (py in 0..H) {
+        let trow = py / 8;
+        let irow = py % 8;
+        let mut line = "";
+        for (px in 0..W) {
+            let tile = trow * 16 + (px / 8);
+            let sh = tile_pixel(chr, tile, irow, px % 8) * 85;   // 0,85,170,255
+            line = line + str(sh) + " " + str(sh) + " " + str(sh) + " ";
+        }
+        print(line);
+    }
+}

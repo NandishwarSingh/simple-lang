@@ -1,0 +1,14 @@
+// nes/ppu.simp — PPU (2C02) helpers. Starting with the pattern-table tile
+// format, which every kind of NES rendering (background and sprites) is built
+// on. A tile is 16 bytes: 8 bytes of bitplane 0 then 8 of bitplane 1; each
+// pixel's 2-bit colour index is (plane1_bit << 1) | plane0_bit.
+import "cpu.simp";
+
+// the 2-bit colour index (0..3) of pixel (col,row) in tile `tile` of CHR.
+fn tile_pixel(chr: *u8, tile: int, row: int, col: int) -> int {
+    let base = tile * 16;
+    let lo = rd(chr, base + row);
+    let hi = rd(chr, base + 8 + row);
+    let bit = 7 - col;
+    return (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
+}

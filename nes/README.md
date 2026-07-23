@@ -67,6 +67,12 @@ simplec nes/nestest.simp -o /tmp/nt
 
 ## Status
 
-The 6502 is complete (all 151 official opcodes) and self-validated, with the
-iNES loader and `nestest` harness ready. Next: cartridge mappers and the PPU
-(background rendering), then input, APU, and an SDL2/PPM frontend.
+**The 6502 passes `nestest`.** Running the canonical CPU test ROM, this core
+matches the reference Nintendulator log **exactly for all 5003 official-opcode
+instructions** — every PC, A, X, Y, P, and SP identical — and the ROM's
+`$02`/`$03` result bytes both read `00` (the pass code). It stops only where
+nestest moves on to *unofficial* opcodes. The CPU is instruction- and
+flag-exact.
+
+Next: cartridge mappers and the PPU (tile decoding → background rendering →
+sprites → timing/NMI), then input, APU, and an SDL2/PPM frontend.
