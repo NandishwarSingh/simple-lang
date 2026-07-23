@@ -82,6 +82,14 @@ proves it end-to-end — a 6502 program writes tile indices through `$2006`/
 `$2007`, they land in nametable memory, and the frame renders. The
 nestest-validated CPU is untouched (it never accesses `$2000`-`$3FFF`).
 
-Next: an NMI-driven frame loop with PPU timing so a real cartridge boots and
-draws its own title screen — then attribute-table palettes, sprites (OAM),
-input (`$4016`), APU, and an SDL2 live window.
+And a **NES program now boots and draws its own screen.** `nes.simp` runs an
+NMI-driven frame loop (visible period with vblank clear, then vblank with the
+flag set and NMI fired); `ppu.simp` renders the background in full colour via
+the attribute table, palette RAM, and the 64-colour NES master palette. A
+self-contained test ROM — reset handler waits for vblank, loads a palette,
+enables NMI + rendering; NMI handler draws the nametable each frame — boots and
+renders an authentic NES frame (blue background, white/cyan text).
+
+Next: **sprites** (OAM rendering + sprite-0 hit), **input** (`$4016`/`$4017`),
+cycle-accurate timing so commercial ROMs boot cleanly, more **mappers**, the
+**APU**, and an **SDL2 live window**.

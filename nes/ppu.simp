@@ -58,6 +58,68 @@ fn render_bg(fb: *u8, mem: *u8, patBase: int, ntBase: int, pal: *u8) {
     }
 }
 
+// The NES master palette (64 colours), built into a 192-byte RGB buffer.
+fn master_palette() -> *u8 {
+    let mut c = list int;
+    push(c, 0x545454); push(c, 0x001E74); push(c, 0x081090); push(c, 0x300088);
+    push(c, 0x440064); push(c, 0x5C0030); push(c, 0x540400); push(c, 0x3C1800);
+    push(c, 0x202A00); push(c, 0x083A00); push(c, 0x004000); push(c, 0x003C00);
+    push(c, 0x00323C); push(c, 0x000000); push(c, 0x000000); push(c, 0x000000);
+    push(c, 0x989698); push(c, 0x084CC4); push(c, 0x3032EC); push(c, 0x5C1EE4);
+    push(c, 0x8814B0); push(c, 0xA01464); push(c, 0x982220); push(c, 0x783C00);
+    push(c, 0x545A00); push(c, 0x287200); push(c, 0x087C00); push(c, 0x007628);
+    push(c, 0x006678); push(c, 0x000000); push(c, 0x000000); push(c, 0x000000);
+    push(c, 0xECEEEC); push(c, 0x4C9AEC); push(c, 0x787CEC); push(c, 0xB062EC);
+    push(c, 0xE454EC); push(c, 0xEC58B4); push(c, 0xEC6A64); push(c, 0xD48820);
+    push(c, 0xA0AA00); push(c, 0x74C400); push(c, 0x4CD020); push(c, 0x38CC6C);
+    push(c, 0x38B4CC); push(c, 0x3C3C3C); push(c, 0x000000); push(c, 0x000000);
+    push(c, 0xECEEEC); push(c, 0xA8CCEC); push(c, 0xBCBCEC); push(c, 0xD4B2EC);
+    push(c, 0xECAEEC); push(c, 0xECAED4); push(c, 0xECB4B0); push(c, 0xE4C490);
+    push(c, 0xCCD278); push(c, 0xB4DE78); push(c, 0xA8E290); push(c, 0x98E2B4);
+    push(c, 0xA0D6E4); push(c, 0xA0A2A0); push(c, 0x000000); push(c, 0x000000);
+    let p = malloc(192);
+    for (i in 0..64) {
+        let v = c[i];
+        wr(p, i * 3 + 0, (v >> 16) & 0xFF);
+        wr(p, i * 3 + 1, (v >> 8) & 0xFF);
+        wr(p, i * 3 + 2, v & 0xFF);
+    }
+    return p;
+}
+
+// Render nametable 0's background as the running PPU sees it: pattern table
+// chosen by PPUCTRL, per-region palette from the attribute table, colours from
+// palette RAM, RGB from the master palette. `ram` is the machine buffer.
+fn render_frame(fb: *u8, ram: *u8, master: *u8) {
+    let patBase = 0x1000 + 0x1000 * ((rd(ram, 0x0800) >> 4) & 1);
+    let ntBase = 0x3000;                 // PPU $2000
+    let attrBase = ntBase + 0x3C0;
+    let palBase = 0x4F00;                // PPU $3F00
+    for (ty in 0..30) {
+        for (tx in 0..32) {
+            let tile = rd(ram, ntBase + ty * 32 + tx);
+            let attr = rd(ram, attrBase + (ty / 4) * 8 + (tx / 4));
+            let palidx = (attr >> (((ty & 2) << 1) | (tx & 2))) & 3;
+            let tb = patBase + tile * 16;
+            for (row in 0..8) {
+                let lo = rd(ram, tb + row);
+                let hi = rd(ram, tb + 8 + row);
+                for (col in 0..8) {
+                    let bit = 7 - col;
+                    let ci = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
+                    let mut pe = rd(ram, palBase);              // universal bg (ci 0)
+                    if (ci != 0) { pe = rd(ram, palBase + palidx * 4 + ci); }
+                    pe = pe & 0x3F;
+                    let o = (((ty * 8 + row) * 256) + (tx * 8 + col)) * 3;
+                    wr(fb, o + 0, rd(master, pe * 3 + 0));
+                    wr(fb, o + 1, rd(master, pe * 3 + 1));
+                    wr(fb, o + 2, rd(master, pe * 3 + 2));
+                }
+            }
+        }
+    }
+}
+
 // write a 256x240 RGB framebuffer as a P3 PPM to stdout.
 fn write_ppm(fb: *u8) {
     print("P3");

@@ -1,0 +1,43 @@
+// nes/nes.simp — the runner: load a .nes cartridge, run frames with an
+// NMI-driven timing model, and write the rendered screen as a PPM.
+//
+//   simplec nes/nes.simp -o /tmp/nes && /tmp/nes game.nes [frames] > out.ppm
+//
+// Timing is approximate (per-frame instruction budgets, not cycle-exact): each
+// frame runs a visible period with the vblank flag clear, then a vblank period
+// with the flag set and an NMI fired if PPUCTRL enables it. That is enough for
+// NMI-driven and vblank-polling games to init the PPU and draw a frame.
+import "cpu.simp";
+import "ines.simp";
+import "ppu.simp";
+
+fn run_frame(c: *u8, ram: *u8, prg: *u8, prgsz: int) {
+    // visible: vblank clear
+    wr(ram, 0x0802, rd(ram, 0x0802) & 0x7F);
+    for (i in 0..7000) { step(c, ram, prg, prgsz); }
+    // vblank: set flag, fire NMI if enabled, run the handler + a little more
+    wr(ram, 0x0802, rd(ram, 0x0802) | 0x80);
+    if ((rd(ram, 0x0800) & 0x80) != 0) { nmi(c, ram, prg, prgsz); }
+    for (i in 0..1500) { step(c, ram, prg, prgsz); }
+}
+
+fn main() {
+    let (prg, prgsz, chr, chrsz, mapper) = load_rom(arg(1));
+    if (mapper < 0) { print("could not load ROM"); exit(1); }
+
+    let ram = malloc(20480);
+    for (i in 0..20480) { wr(ram, i, 0); }
+    for (i in 0..chrsz) { wr(ram, 0x1000 + i, rd(chr, i)); }   // CHR -> PPU pattern memory
+
+    let cpu = malloc(8);
+    reset(cpu, ram, prg, prgsz);
+
+    let mut frames = 4;
+    if (argc() > 2) { frames = int(arg(2)); }
+    for (f in 0..frames) { run_frame(cpu, ram, prg, prgsz); }
+
+    let master = master_palette();
+    let fb = malloc(184320);
+    render_frame(fb, ram, master);
+    write_ppm(fb);
+}
