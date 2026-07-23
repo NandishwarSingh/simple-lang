@@ -91,6 +91,12 @@ fn busrd(ram: *u8, prg: *u8, prgsz: int, addr: int) -> int {
         }
         return 0;
     }
+    if (a == 0x4016) {                                      // controller 1
+        if (rd(ram, 0x080D) == 1) { return rd(ram, 0x080B) & 1; }  // strobed: always button A
+        let sr = rd(ram, 0x080C);
+        wr(ram, 0x080C, (sr >> 1) | 0x80);                 // shift out (bit0), fill 1s
+        return sr & 1;
+    }
     if (a >= 0x8000) {
         let off = a - 0x8000;
         if (prgsz == 0x4000) { return rd(prg, off & 0x3FFF); }   // 16KB, mirrored
@@ -132,7 +138,16 @@ fn buswr(ram: *u8, addr: int, v: int) {
         for (i in 0..256) { wr(ram, 0x0900 + i, rd(ram, (page + i) & 0x7FF)); }
         return;
     }
+    if (a == 0x4016) {                                      // controller strobe
+        wr(ram, 0x080D, v & 1);
+        if ((v & 1) == 1) { wr(ram, 0x080C, rd(ram, 0x080B)); }  // reload shift register
+        return;
+    }
 }
+
+// set controller 1's button state: bit0=A 1=B 2=Select 3=Start 4=Up 5=Down
+// 6=Left 7=Right. The frontend (or a test) calls this before running frames.
+fn set_buttons(ram: *u8, buttons: int) { wr(ram, 0x080B, buttons & 0xFF); }
 
 // Non-maskable interrupt (PPU vblank): push PC and P, jump to the NMI vector.
 fn nmi(c: *u8, ram: *u8, prg: *u8, prgsz: int) {

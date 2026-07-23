@@ -118,6 +118,48 @@ fn render_frame(fb: *u8, ram: *u8, master: *u8) {
             }
         }
     }
+    render_sprites(fb, ram, master);
+}
+
+// Draw the 64 OAM sprites over the background. Each sprite is 4 bytes in OAM
+// (Y, tile, attr, X); attr bit0-1 = palette (sprite palettes at $3F10), bit6 =
+// flip-H, bit7 = flip-V. Colour index 0 is transparent. Drawn back-to-front so
+// sprite 0 wins. 8x8 sprites; priority-vs-background is simplified to "on top".
+fn render_sprites(fb: *u8, ram: *u8, master: *u8) {
+    let sprPat = 0x1000 + 0x1000 * ((rd(ram, 0x0800) >> 3) & 1);   // PPUCTRL bit3
+    let palBase = 0x4F00;
+    for (s in 0..64) {
+        let base = 0x0900 + (63 - s) * 4;                          // high index first
+        let sy = rd(ram, base + 0);
+        if (sy < 0xEF) {                                           // on screen
+            let tile = rd(ram, base + 1);
+            let attr = rd(ram, base + 2);
+            let sx = rd(ram, base + 3);
+            let palidx = attr & 3;
+            let flipH = (attr >> 6) & 1;
+            let flipV = (attr >> 7) & 1;
+            let tb = sprPat + tile * 16;
+            for (row in 0..8) {
+                let srow = row * (1 - flipV) + (7 - row) * flipV;
+                let lo = rd(ram, tb + srow);
+                let hi = rd(ram, tb + 8 + srow);
+                for (col in 0..8) {
+                    let scol = col * (1 - flipH) + (7 - col) * flipH;
+                    let bit = 7 - scol;
+                    let ci = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
+                    let px = sx + col;
+                    let py = sy + 1 + row;
+                    if (ci != 0 && px < 256 && py < 240) {
+                        let pe = rd(ram, palBase + 0x10 + palidx * 4 + ci) & 0x3F;
+                        let o = (py * 256 + px) * 3;
+                        wr(fb, o + 0, rd(master, pe * 3 + 0));
+                        wr(fb, o + 1, rd(master, pe * 3 + 1));
+                        wr(fb, o + 2, rd(master, pe * 3 + 2));
+                    }
+                }
+            }
+        }
+    }
 }
 
 // write a 256x240 RGB framebuffer as a P3 PPM to stdout.

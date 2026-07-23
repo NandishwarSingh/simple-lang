@@ -115,4 +115,22 @@ fn main() {
     reset(cpu, ram, prg, prgsz);
     run(cpu, ram, prg, prgsz);
     print(busrd(ram, prg, prgsz, 0x0050));          // 119 ($77)
+
+    // ---- Test 7: controller input via $4016 (B pressed) ----
+    zero(ram, 2048); zero(prg, 32768);
+    set_buttons(ram, 0x02);                          // bit1 = B
+    wr(prg, 0x00, 0xA9); wr(prg, 0x01, 0x01);        // LDA #1
+    wr(prg, 0x02, 0x8D); wr(prg, 0x03, 0x16); wr(prg, 0x04, 0x40); // STA $4016 (strobe on)
+    wr(prg, 0x05, 0xA9); wr(prg, 0x06, 0x00);        // LDA #0
+    wr(prg, 0x07, 0x8D); wr(prg, 0x08, 0x16); wr(prg, 0x09, 0x40); // STA $4016 (strobe off)
+    wr(prg, 0x0A, 0xAD); wr(prg, 0x0B, 0x16); wr(prg, 0x0C, 0x40); // LDA $4016 (read A)
+    wr(prg, 0x0D, 0x85); wr(prg, 0x0E, 0x10);        // STA $10
+    wr(prg, 0x0F, 0xAD); wr(prg, 0x10, 0x16); wr(prg, 0x11, 0x40); // LDA $4016 (read B)
+    wr(prg, 0x12, 0x85); wr(prg, 0x13, 0x11);        // STA $11
+    wr(prg, 0x14, 0x00);                             // BRK
+    wr(prg, 0x7FFC, 0x00); wr(prg, 0x7FFD, 0x80);
+    reset(cpu, ram, prg, prgsz);
+    run(cpu, ram, prg, prgsz);
+    print(busrd(ram, prg, prgsz, 0x0010));           // 0 (A up)
+    print(busrd(ram, prg, prgsz, 0x0011));           // 1 (B pressed)
 }

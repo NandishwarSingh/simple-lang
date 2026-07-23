@@ -90,6 +90,15 @@ self-contained test ROM — reset handler waits for vblank, loads a palette,
 enables NMI + rendering; NMI handler draws the nametable each frame — boots and
 renders an authentic NES frame (blue background, white/cyan text).
 
-Next: **sprites** (OAM rendering + sprite-0 hit), **input** (`$4016`/`$4017`),
-cycle-accurate timing so commercial ROMs boot cleanly, more **mappers**, the
-**APU**, and an **SDL2 live window**.
+**Sprites** render too: `render_sprites` draws the 64 OAM sprites (palette,
+H/V flip, back-to-front) over the background. The test ROM places four sprites
+via `$2003`/`$2004` and they appear as "ABCD" over the scene.
+
+**Input** works too: `$4016` implements the controller strobe + shift register,
+and `set_buttons` lets a frontend feed key state (a test reads B pressed / A up
+correctly). The core is now everything a game needs — CPU, PPU (bg + sprites),
+NMI timing, and controllers.
+
+Next: an **SDL2 live window** (real-time display + keyboard → `set_buttons`,
+like `examples/plasma.simp`), cycle-accurate timing so commercial ROMs boot
+cleanly, more **mappers**, and the **APU** for sound.
