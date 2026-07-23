@@ -1,0 +1,70 @@
+// nes/test_cpu.simp — run hand-crafted 6502 programs and check the results.
+import "cpu.simp";
+
+fn zero(p: *u8, n: int) { for (i in 0..n) { wr(p, i, 0); } }
+
+// run until BRK (0x00) or an unimplemented opcode; returns steps executed.
+fn run(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
+    let mut steps = 0;
+    while (steps < 1000000) {
+        let op = step(c, ram, prg, prgsz);
+        if (op == 0x00) { return steps; }               // BRK
+        if (op < 0) { print(0 - op); return 0 - steps; } // unimplemented: prints opcode
+        steps = steps + 1;
+    }
+    return steps;
+}
+
+fn main() {
+    let cpu = malloc(8);
+    let ram = malloc(2048);
+    let prg = malloc(32768);
+    let prgsz = 32768;
+
+    // ---- Test 1: sum 10+9+...+1 into $10 (expect 55) ----
+    zero(ram, 2048); zero(prg, 32768);
+    wr(prg, 0x0000, 0xA9); wr(prg, 0x0001, 0x00);   // LDA #0
+    wr(prg, 0x0002, 0x85); wr(prg, 0x0003, 0x10);   // STA $10   ; sum = 0
+    wr(prg, 0x0004, 0xA2); wr(prg, 0x0005, 0x0A);   // LDX #10
+    wr(prg, 0x0006, 0x8A);                          // TXA       ; loop:
+    wr(prg, 0x0007, 0x18);                          // CLC
+    wr(prg, 0x0008, 0x65); wr(prg, 0x0009, 0x10);   // ADC $10
+    wr(prg, 0x000A, 0x85); wr(prg, 0x000B, 0x10);   // STA $10   ; sum += X
+    wr(prg, 0x000C, 0xCA);                          // DEX
+    wr(prg, 0x000D, 0xD0); wr(prg, 0x000E, 0xF7);   // BNE loop
+    wr(prg, 0x000F, 0x00);                          // BRK
+    wr(prg, 0x7FFC, 0x00); wr(prg, 0x7FFD, 0x80);   // reset vector -> 0x8000
+    reset(cpu, ram, prg, prgsz);
+    let s1 = run(cpu, ram, prg, prgsz);
+    print(busrd(ram, prg, prgsz, 0x0010));          // 55
+    print(s1);                                      // steps taken
+
+    // ---- Test 2: JSR/RTS + INC — call a routine that increments $20 twice ----
+    zero(ram, 2048); zero(prg, 32768);
+    wr(prg, 0x0000, 0x20); wr(prg, 0x0001, 0x10); wr(prg, 0x0002, 0x80); // JSR $8010
+    wr(prg, 0x0003, 0x20); wr(prg, 0x0004, 0x10); wr(prg, 0x0005, 0x80); // JSR $8010
+    wr(prg, 0x0006, 0x00);                                               // BRK
+    wr(prg, 0x0010, 0xE6); wr(prg, 0x0011, 0x20);                        // INC $20
+    wr(prg, 0x0012, 0x60);                                               // RTS
+    wr(prg, 0x7FFC, 0x00); wr(prg, 0x7FFD, 0x80);
+    reset(cpu, ram, prg, prgsz);
+    run(cpu, ram, prg, prgsz);
+    print(busrd(ram, prg, prgsz, 0x0020));          // 2
+
+    // ---- Test 3: carry & compare — SEC/SBC and CMP setting flags ----
+    zero(ram, 2048); zero(prg, 32768);
+    wr(prg, 0x0000, 0xA9); wr(prg, 0x0001, 0x50);   // LDA #$50
+    wr(prg, 0x0002, 0x38);                          // SEC
+    wr(prg, 0x0003, 0xE9); wr(prg, 0x0004, 0x10);   // SBC #$10  -> $40
+    wr(prg, 0x0005, 0x85); wr(prg, 0x0006, 0x30);   // STA $30
+    wr(prg, 0x0007, 0xC9); wr(prg, 0x0008, 0x40);   // CMP #$40  -> Z set, C set
+    wr(prg, 0x0009, 0xF0); wr(prg, 0x000A, 0x02);   // BEQ +2  (skip next)
+    wr(prg, 0x000B, 0xA9); wr(prg, 0x000C, 0xFF);   // LDA #$FF (should be skipped)
+    wr(prg, 0x000D, 0x85); wr(prg, 0x000E, 0x31);   // STA $31  (= $40 if BEQ taken)
+    wr(prg, 0x000F, 0x00);                          // BRK
+    wr(prg, 0x7FFC, 0x00); wr(prg, 0x7FFD, 0x80);
+    reset(cpu, ram, prg, prgsz);
+    run(cpu, ram, prg, prgsz);
+    print(busrd(ram, prg, prgsz, 0x0030));          // 64  ($40)
+    print(busrd(ram, prg, prgsz, 0x0031));          // 64  (BEQ taken, LDA #$FF skipped)
+}

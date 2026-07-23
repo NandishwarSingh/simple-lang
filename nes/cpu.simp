@@ -1,0 +1,226 @@
+// nes/cpu.simp — the Ricoh 2A03 CPU core (a MOS 6502 without decimal mode).
+//
+// All mutable state lives in unsafe malloc'd byte buffers, reached through raw
+// pointers — the only way to have fast shared mutable state in Simple today
+// (safe value-semantic threading copies the whole buffer per access). See the
+// language repo's issue #13 for the optimization that would let this be safe.
+//
+// CPU state buffer layout (8 bytes): [0]A [1]X [2]Y [3]SP [4]P [5,6]PC(le).
+
+extern fn malloc(size: u64) -> *u8;
+
+// ---- raw byte access -------------------------------------------------------
+fn rd(p: *u8, off: int) -> int {
+    let mut v: u8 = 0;
+    unsafe { v = *(p + off); }
+    return int(v);
+}
+fn wr(p: *u8, off: int, v: int) {
+    unsafe { *(p + off) = u8(v & 0xFF); }
+}
+fn rd16(p: *u8, off: int) -> int { return rd(p, off) | (rd(p, off + 1) << 8); }
+fn wr16(p: *u8, off: int, v: int) { wr(p, off, v & 0xFF); wr(p, off + 1, (v >> 8) & 0xFF); }
+
+// ---- register accessors (cpu buffer) --------------------------------------
+fn getA(c: *u8) -> int { return rd(c, 0); }
+fn setA(c: *u8, v: int) { wr(c, 0, v); }
+fn getX(c: *u8) -> int { return rd(c, 1); }
+fn setX(c: *u8, v: int) { wr(c, 1, v); }
+fn getY(c: *u8) -> int { return rd(c, 2); }
+fn setY(c: *u8, v: int) { wr(c, 2, v); }
+fn getSP(c: *u8) -> int { return rd(c, 3); }
+fn setSP(c: *u8, v: int) { wr(c, 3, v); }
+fn getP(c: *u8) -> int { return rd(c, 4); }
+fn setP(c: *u8, v: int) { wr(c, 4, v); }
+fn getPC(c: *u8) -> int { return rd16(c, 5); }
+fn setPC(c: *u8, v: int) { wr16(c, 5, v & 0xFFFF); }
+
+// ---- status flags (bit positions in P) ------------------------------------
+// 0=C 1=Z 2=I 3=D 4=B 5=U(1) 6=V 7=N
+fn getf(c: *u8, bit: int) -> bool { return ((getP(c) >> bit) & 1) == 1; }
+fn setf(c: *u8, bit: int, on: bool) {
+    let p = getP(c);
+    if (on) { setP(c, p | (1 << bit)); }
+    else { setP(c, p & (255 ^ (1 << bit))); }
+}
+fn setZN(c: *u8, v: int) {
+    setf(c, 1, (v & 0xFF) == 0);       // Zero
+    setf(c, 7, (v & 0x80) != 0);       // Negative
+}
+
+// ---- the CPU bus: RAM (2KB, mirrored) + PRG-ROM (NROM mapper 0) ------------
+// PPU/APU/mapper wiring arrives with those units; for now writes above RAM are
+// swallowed and reads return open-bus 0.
+fn busrd(ram: *u8, prg: *u8, prgsz: int, addr: int) -> int {
+    let a = addr & 0xFFFF;
+    if (a < 0x2000) { return rd(ram, a & 0x07FF); }
+    if (a >= 0x8000) {
+        let off = a - 0x8000;
+        if (prgsz == 0x4000) { return rd(prg, off & 0x3FFF); }   // 16KB, mirrored
+        return rd(prg, off);                                     // 32KB
+    }
+    return 0;
+}
+fn buswr(ram: *u8, addr: int, v: int) {
+    let a = addr & 0xFFFF;
+    if (a < 0x2000) { wr(ram, a & 0x07FF, v); }
+    // else: PPU/APU/cart — wired in later units
+}
+
+// pull the next byte at PC and advance PC (for opcode and operand bytes)
+fn fetch(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
+    let pc = getPC(c);
+    let b = busrd(ram, prg, prgsz, pc);
+    setPC(c, pc + 1);
+    return b;
+}
+
+// ---- stack (page 0x0100) ---------------------------------------------------
+fn spush(c: *u8, ram: *u8, v: int) {
+    buswr(ram, 0x0100 + getSP(c), v);
+    setSP(c, (getSP(c) - 1) & 0xFF);
+}
+fn spull(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
+    setSP(c, (getSP(c) + 1) & 0xFF);
+    return busrd(ram, prg, prgsz, 0x0100 + getSP(c));
+}
+
+// ---- arithmetic core (shared by ADC/SBC) ----------------------------------
+fn adc(c: *u8, val: int) {
+    let a = getA(c);
+    let carry = 0;
+    let cin = carry;
+    let ci = 0;
+    let cc = getf(c, 0);
+    let addend = val & 0xFF;
+    let mut sum = a + addend;
+    if (cc) { sum = sum + 1; }
+    setf(c, 0, sum > 0xFF);                                     // Carry out
+    let res = sum & 0xFF;
+    // Overflow: operands share sign, result differs
+    setf(c, 6, (((a ^ res) & (addend ^ res)) & 0x80) != 0);
+    setA(c, res);
+    setZN(c, res);
+}
+
+// signed 8-bit relative offset for branches
+fn rel8(b: int) -> int { if (b < 0x80) { return b; } return b - 256; }
+
+// ---- one instruction. Returns the opcode (0x00 = BRK, used to halt tests). --
+fn step(c: *u8, ram: *u8, prg: *u8, prgsz: int) -> int {
+    let op = fetch(c, ram, prg, prgsz);
+
+    // ---- loads ----
+    if (op == 0xA9) { setA(c, fetch(c, ram, prg, prgsz)); setZN(c, getA(c)); return op; } // LDA #
+    if (op == 0xA5) { let a = fetch(c, ram, prg, prgsz); setA(c, busrd(ram, prg, prgsz, a)); setZN(c, getA(c)); return op; } // LDA zp
+    if (op == 0xAD) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); setA(c, busrd(ram, prg, prgsz, lo | (hi << 8))); setZN(c, getA(c)); return op; } // LDA abs
+    if (op == 0xB5) { let a = (fetch(c, ram, prg, prgsz) + getX(c)) & 0xFF; setA(c, busrd(ram, prg, prgsz, a)); setZN(c, getA(c)); return op; } // LDA zp,X
+    if (op == 0xA2) { setX(c, fetch(c, ram, prg, prgsz)); setZN(c, getX(c)); return op; } // LDX #
+    if (op == 0xA6) { let a = fetch(c, ram, prg, prgsz); setX(c, busrd(ram, prg, prgsz, a)); setZN(c, getX(c)); return op; } // LDX zp
+    if (op == 0xAE) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); setX(c, busrd(ram, prg, prgsz, lo | (hi << 8))); setZN(c, getX(c)); return op; } // LDX abs
+    if (op == 0xA0) { setY(c, fetch(c, ram, prg, prgsz)); setZN(c, getY(c)); return op; } // LDY #
+    if (op == 0xA4) { let a = fetch(c, ram, prg, prgsz); setY(c, busrd(ram, prg, prgsz, a)); setZN(c, getY(c)); return op; } // LDY zp
+    if (op == 0xAC) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); setY(c, busrd(ram, prg, prgsz, lo | (hi << 8))); setZN(c, getY(c)); return op; } // LDY abs
+
+    // ---- stores ----
+    if (op == 0x85) { let a = fetch(c, ram, prg, prgsz); buswr(ram, a, getA(c)); return op; } // STA zp
+    if (op == 0x8D) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); buswr(ram, lo | (hi << 8), getA(c)); return op; } // STA abs
+    if (op == 0x95) { let a = (fetch(c, ram, prg, prgsz) + getX(c)) & 0xFF; buswr(ram, a, getA(c)); return op; } // STA zp,X
+    if (op == 0x86) { let a = fetch(c, ram, prg, prgsz); buswr(ram, a, getX(c)); return op; } // STX zp
+    if (op == 0x8E) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); buswr(ram, lo | (hi << 8), getX(c)); return op; } // STX abs
+    if (op == 0x84) { let a = fetch(c, ram, prg, prgsz); buswr(ram, a, getY(c)); return op; } // STY zp
+    if (op == 0x8C) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); buswr(ram, lo | (hi << 8), getY(c)); return op; } // STY abs
+
+    // ---- transfers ----
+    if (op == 0xAA) { setX(c, getA(c)); setZN(c, getX(c)); return op; } // TAX
+    if (op == 0x8A) { setA(c, getX(c)); setZN(c, getA(c)); return op; } // TXA
+    if (op == 0xA8) { setY(c, getA(c)); setZN(c, getY(c)); return op; } // TAY
+    if (op == 0x98) { setA(c, getY(c)); setZN(c, getA(c)); return op; } // TYA
+    if (op == 0xBA) { setX(c, getSP(c)); setZN(c, getX(c)); return op; } // TSX
+    if (op == 0x9A) { setSP(c, getX(c)); return op; }                    // TXS
+
+    // ---- inc / dec ----
+    if (op == 0xE8) { setX(c, (getX(c) + 1) & 0xFF); setZN(c, getX(c)); return op; } // INX
+    if (op == 0xCA) { setX(c, (getX(c) - 1) & 0xFF); setZN(c, getX(c)); return op; } // DEX
+    if (op == 0xC8) { setY(c, (getY(c) + 1) & 0xFF); setZN(c, getY(c)); return op; } // INY
+    if (op == 0x88) { setY(c, (getY(c) - 1) & 0xFF); setZN(c, getY(c)); return op; } // DEY
+    if (op == 0xE6) { let a = fetch(c, ram, prg, prgsz); let v = (busrd(ram, prg, prgsz, a) + 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; } // INC zp
+    if (op == 0xC6) { let a = fetch(c, ram, prg, prgsz); let v = (busrd(ram, prg, prgsz, a) - 1) & 0xFF; buswr(ram, a, v); setZN(c, v); return op; } // DEC zp
+
+    // ---- arithmetic ----
+    if (op == 0x69) { adc(c, fetch(c, ram, prg, prgsz)); return op; } // ADC #
+    if (op == 0x65) { let a = fetch(c, ram, prg, prgsz); adc(c, busrd(ram, prg, prgsz, a)); return op; } // ADC zp
+    if (op == 0x6D) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); adc(c, busrd(ram, prg, prgsz, lo | (hi << 8))); return op; } // ADC abs
+    if (op == 0xE9) { adc(c, fetch(c, ram, prg, prgsz) ^ 0xFF); return op; } // SBC #
+    if (op == 0xE5) { let a = fetch(c, ram, prg, prgsz); adc(c, busrd(ram, prg, prgsz, a) ^ 0xFF); return op; } // SBC zp
+
+    // ---- compares ----
+    if (op == 0xC9) { let v = fetch(c, ram, prg, prgsz); let t = getA(c) - v; setf(c, 0, getA(c) >= v); setZN(c, t & 0xFF); return op; } // CMP #
+    if (op == 0xC5) { let a = fetch(c, ram, prg, prgsz); let v = busrd(ram, prg, prgsz, a); let t = getA(c) - v; setf(c, 0, getA(c) >= v); setZN(c, t & 0xFF); return op; } // CMP zp
+    if (op == 0xE0) { let v = fetch(c, ram, prg, prgsz); let t = getX(c) - v; setf(c, 0, getX(c) >= v); setZN(c, t & 0xFF); return op; } // CPX #
+    if (op == 0xC0) { let v = fetch(c, ram, prg, prgsz); let t = getY(c) - v; setf(c, 0, getY(c) >= v); setZN(c, t & 0xFF); return op; } // CPY #
+
+    // ---- logic ----
+    if (op == 0x29) { setA(c, getA(c) & fetch(c, ram, prg, prgsz)); setZN(c, getA(c)); return op; } // AND #
+    if (op == 0x09) { setA(c, getA(c) | fetch(c, ram, prg, prgsz)); setZN(c, getA(c)); return op; } // ORA #
+    if (op == 0x49) { setA(c, getA(c) ^ fetch(c, ram, prg, prgsz)); setZN(c, getA(c)); return op; } // EOR #
+
+    // ---- branches ----
+    if (op == 0x10) { let o = rel8(fetch(c, ram, prg, prgsz)); if (!getf(c, 7)) { setPC(c, getPC(c) + o); } return op; } // BPL
+    if (op == 0x30) { let o = rel8(fetch(c, ram, prg, prgsz)); if (getf(c, 7))  { setPC(c, getPC(c) + o); } return op; } // BMI
+    if (op == 0x50) { let o = rel8(fetch(c, ram, prg, prgsz)); if (!getf(c, 6)) { setPC(c, getPC(c) + o); } return op; } // BVC
+    if (op == 0x70) { let o = rel8(fetch(c, ram, prg, prgsz)); if (getf(c, 6))  { setPC(c, getPC(c) + o); } return op; } // BVS
+    if (op == 0x90) { let o = rel8(fetch(c, ram, prg, prgsz)); if (!getf(c, 0)) { setPC(c, getPC(c) + o); } return op; } // BCC
+    if (op == 0xB0) { let o = rel8(fetch(c, ram, prg, prgsz)); if (getf(c, 0))  { setPC(c, getPC(c) + o); } return op; } // BCS
+    if (op == 0xD0) { let o = rel8(fetch(c, ram, prg, prgsz)); if (!getf(c, 1)) { setPC(c, getPC(c) + o); } return op; } // BNE
+    if (op == 0xF0) { let o = rel8(fetch(c, ram, prg, prgsz)); if (getf(c, 1))  { setPC(c, getPC(c) + o); } return op; } // BEQ
+
+    // ---- jumps / subroutines ----
+    if (op == 0x4C) { let lo = fetch(c, ram, prg, prgsz); let hi = fetch(c, ram, prg, prgsz); setPC(c, lo | (hi << 8)); return op; } // JMP abs
+    if (op == 0x20) { // JSR abs
+        let lo = fetch(c, ram, prg, prgsz);
+        let hi = fetch(c, ram, prg, prgsz);
+        let ret = (getPC(c) - 1) & 0xFFFF;
+        spush(c, ram, (ret >> 8) & 0xFF);
+        spush(c, ram, ret & 0xFF);
+        setPC(c, lo | (hi << 8));
+        return op;
+    }
+    if (op == 0x60) { // RTS
+        let lo = spull(c, ram, prg, prgsz);
+        let hi = spull(c, ram, prg, prgsz);
+        setPC(c, ((lo | (hi << 8)) + 1) & 0xFFFF);
+        return op;
+    }
+
+    // ---- stack ops ----
+    if (op == 0x48) { spush(c, ram, getA(c)); return op; }                              // PHA
+    if (op == 0x68) { setA(c, spull(c, ram, prg, prgsz)); setZN(c, getA(c)); return op; } // PLA
+    if (op == 0x08) { spush(c, ram, getP(c) | 0x30); return op; }                        // PHP
+    if (op == 0x28) { setP(c, (spull(c, ram, prg, prgsz) & 0xEF) | 0x20); return op; }    // PLP
+
+    // ---- flag ops ----
+    if (op == 0x18) { setf(c, 0, false); return op; } // CLC
+    if (op == 0x38) { setf(c, 0, true);  return op; } // SEC
+    if (op == 0x58) { setf(c, 2, false); return op; } // CLI
+    if (op == 0x78) { setf(c, 2, true);  return op; } // SEI
+    if (op == 0xB8) { setf(c, 6, false); return op; } // CLV
+    if (op == 0xD8) { setf(c, 3, false); return op; } // CLD
+    if (op == 0xF8) { setf(c, 3, true);  return op; } // SED
+
+    if (op == 0xEA) { return op; } // NOP
+    if (op == 0x00) { return op; } // BRK (halts our test harness)
+
+    // Unimplemented opcode: report it (as a negative) so tests catch gaps.
+    return 0 - op;
+}
+
+// reset: load PC from the reset vector (0xFFFC), set SP/P to power-on values.
+fn reset(c: *u8, ram: *u8, prg: *u8, prgsz: int) {
+    setA(c, 0); setX(c, 0); setY(c, 0);
+    setSP(c, 0xFD);
+    setP(c, 0x24);                       // I set, U set
+    let lo = busrd(ram, prg, prgsz, 0xFFFC);
+    let hi = busrd(ram, prg, prgsz, 0xFFFD);
+    setPC(c, lo | (hi << 8));
+}
