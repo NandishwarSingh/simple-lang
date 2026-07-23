@@ -96,14 +96,15 @@ Everything below is designed-but-unbuilt, in build order:
   benchmark. Phase 2: `import` ([chapter 15](15-modules.md)) — the end
   of the single-file era, with a flat namespace and per-file
   diagnostics. The full lab re-ran with zero regression after each.
-- **v0.95 — the vectorization engine.** The big one: an optimizer pass
-  that turns Simple's scalar float loops into real SIMD/NEON. Today a
-  deliberately vectorization-heavy benchmark runs 4.3× slower than C
-  *because* clang vectorizes and Simple doesn't; v0.95 exists to close
-  exactly that gap, measured by exactly that benchmark.
-- **v1.0 —** spec freeze, the last optimization passes, and a long-term
-  dream now visible from here: rewriting Simple's own compiler *in
-  Simple*.
+- **v0.95 — the vectorization engine.** *(Shipped.)* An optimizer pass
+  that turns Simple's element-wise float loops and reductions into real
+  128-bit SIMD (NEON on arm64, SSE/AVX on x86-64), cross-architecture
+  bit-identical. The vectorization-heavy benchmark that once ran ~5.6×
+  slower than C now runs ~2.1×; a dot-product reduction beats C at its
+  default settings. All transparent — you write ordinary loops.
+- **v1.0 —** spec freeze, a few more optimization passes, and the
+  milestone now visible from here: rewriting Simple's own compiler *in
+  Simple* (the lexer goes first).
 - **Later — freestanding.** No libc, no runtime, your `main` *is* the
   machine, a Simple kernel booting in QEMU. Deliberately parked past
   1.0: speed and self-hosting earned the earlier slots.
@@ -115,5 +116,6 @@ annotations. If a feature needs them, we change the feature.
 
 ---
 
-*You've reached the end of the book (for now). Build something! And when you
-outgrow v0.1, come back — this chapter becomes real chapters, in order.*
+*You've reached the end of the book (for now). Build something! And as these
+previewed features ship, come back — this chapter becomes real chapters, in
+order.*

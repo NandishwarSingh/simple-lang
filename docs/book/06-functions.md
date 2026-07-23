@@ -99,8 +99,8 @@ or it calls itself until the stack runs out.
 1. Write `fn max(a: int, b: int) -> int` and test it.
 2. Write `fn factorial(n: int) -> int` recursively (`factorial(5)` is 120).
 3. Delete a `return` from `sign` above and read the error.
-4. Write `fn is_vowel_count_even(word: str) -> bool` — trick question: you
-   can't yet! Strings can't be inspected in v0.1. That's coming in v0.2,
-   and chapter 9 shows what it will look like.
+4. Write `fn is_vowel_count_even(word: str) -> bool` — count the vowels by
+   walking the bytes with `word[i]` up to `len(word)`, then return whether
+   the count is even. Chapter 9 covers string indexing in full.
 
 **Next:** [Understanding Compile Errors →](07-understanding-errors.md)

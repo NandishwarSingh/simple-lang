@@ -604,7 +604,7 @@ element-wise maps, saxpy shapes, reductions) and emit SIMD/NEON instead
 of scalar code, on arm64 (NEON) and amd64 (SSE/AVX). Largest known perf
 gap was: vectorstorm at **~5.6x C** because clang vectorized and Simple
 didn't (91% of its time in the two vectorizable phases). The engine
-below closed it to **2.2x C**.
+below closed it to **2.12x C**.
 
 Decisions locked (2026-07-21): cross-arch determinism is the bar (FMA and
 vector-order reductions allowed); the canonical float-reduction tree order
@@ -629,7 +629,7 @@ accumulator is initialised with a vector op, never a scalar store: a
 scalar store to its fixed slot would let load-forwarding hop the
 `vstore` and return stale data. Reassociating the reduction across
 lanes is licensed by the determinism decision above. **Result:
-vectorstorm ~5.6x C → 2.2x C (1.41s→0.55s, 9-run lab median); a dot-product reduction
+vectorstorm ~5.6x C → 2.12x C (1.41s→0.53s, 9-run lab median, element-wise loops unrolled); a dot-product reduction
 runs 0.10s (four independent accumulators break the latency chain),
 about 4x faster than C `-O2`/`-O3 -march=native` (0.38s) — C cannot
 reassociate a float reduction without `-ffast-math`, so it stays scalar

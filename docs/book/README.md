@@ -6,9 +6,12 @@ Simple is a small systems programming language that compiles straight to native
 machine code. This book teaches it from zero — if you've written a little code
 in any language, you can follow along.
 
-> **Book status:** tracks the compiler at **v0.9 (maps + modules)**. Every code
-> sample in chapters 1–15 compiles and runs today. Chapter 16 previews features that
-> are designed but not built yet, and says so clearly.
+> **Book status:** tracks the compiler at **v0.95**. Every code sample in
+> chapters 1–15 compiles and runs today. v0.95 added an auto-vectorizer — a
+> compiler optimization that emits SIMD for float loops — so your programs got
+> faster with nothing new to learn (see the performance notes in the
+> [main README](../../README.md#performance)). Chapter 16 previews features
+> that are designed but not built yet, and says so clearly.
 > This book is updated in the same commit as any language change.
 
 ## Contents

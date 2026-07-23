@@ -49,22 +49,27 @@ no more.
 
 ## The types
 
-Simple v0.1 has three types:
+We'll start with the three scalar types you'll use most:
 
 | type   | example values      | what it is                        |
 |--------|---------------------|-----------------------------------|
 | `int`  | `42`, `-7`, `0xFF`  | 64-bit signed integer             |
 | `bool` | `true`, `false`     | a truth value                     |
-| `str`  | `"hello\n"`         | text (read-only literals, v0.1)   |
+| `str`  | `"hello\n"`         | text                              |
 
 Notes:
 
 - `int` is always 64-bit. No `short`/`long`/`unsigned` zoo — one integer
-  type you can trust. (Sized types like `u8` arrive with the bare-metal work.)
+  type you can trust. Sized types (`i8`–`i64`, `u8`–`u64`) and `float`/`f32`
+  are there when you need them; the bare-metal chapter covers the sized ones.
 - Integer literals can be hex: `0xFF` is 255.
 - Strings support escapes: `\n` newline, `\t` tab, `\"` quote, `\\` backslash.
-- Real string manipulation (concatenation, length) comes in v0.2 when strings
-  become heap values.
+- Strings are full heap values: concatenate with `+`, measure with `len()`,
+  index a byte with `s[i]`, slice with `substr` — chapter 9 goes deep. And
+  they free themselves automatically (chapter 8), so you never manage memory.
+
+Beyond these, Simple has structs, fixed arrays, growable `list`s, `map`s,
+channels, and raw pointers — each introduced in its own chapter.
 
 ## Type annotations
 

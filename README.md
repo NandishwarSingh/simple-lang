@@ -142,14 +142,14 @@ honest: 14 benchmarks, identical algorithms, run against C, C++, Rust, Go, Zig,
 and Swift (median of 9 runs, `-O2`-class flags, `perf/results/`).
 
 On an Apple M5, Simple **beats or ties C on 6 of 14** and posts a **median of
-1.28× C**:
+1.27× C**:
 
 | benchmark | Simple vs C | note |
 |-----------|:-----------:|------|
 | chanping | **0.88×** | channel round-trips — faster than C |
 | gauntlet | **0.93×** | a brutal mixed workload *built to expose value-semantics costs* — still under C |
 | primes / sieve / bitops | **1.00×** | ties C |
-| vectorstorm | 2.20× | float SIMD — was ~5.6× before the auto-vectorizer landed |
+| vectorstorm | 2.12× | float SIMD — was ~5.6× before the auto-vectorizer landed |
 | nbody | 5.50× | the last big gap (needs array-of-structs → struct-of-arrays) |
 
 Every benchmark produces a **byte-identical result in all seven languages**, and

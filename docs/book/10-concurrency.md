@@ -122,8 +122,7 @@ checks for concurrency — the model makes the bugs unrepresentable.
 1. Spawn 4 workers and split `is_prime` counting over 1..100000 among
    them by range. Compare the time against one worker (`time ./prog`).
 2. Build a two-stage pipeline: one thread turns numbers into strings
-   (`"n=" + ...` needs v0.5's int-to-str — improvise with fixed words),
-   a second shouts them. Shut both down with sentinels.
+   (`"n=" + str(i)`), a second shouts them. Shut both down with sentinels.
 3. Delete one of the two `-1` pills in the worker-pool example and watch
    the program hang forever — then explain why. (That hang is honest:
    a worker is blocked on `recv` and nobody will ever send.)

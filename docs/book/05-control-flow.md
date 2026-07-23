@@ -37,9 +37,25 @@ fn main() {
 }
 ```
 
-The loop variable needs `let mut` — it changes every iteration. (A `for` loop
-over ranges, `for (i in 0..10)`, is planned for v0.2; until then `while` does
-everything.)
+The loop variable needs `let mut` — it changes every iteration.
+
+## `for`
+
+When you're counting over a range, `for` says it more directly:
+
+```simp
+fn main() {
+    for (i in 0..5) {
+        print(i);           // 0, 1, 2, 3, 4
+    }
+}
+```
+
+`0..5` is a half-open range: it includes `0` and stops **before** `5`, so
+this runs five times. The loop variable (`i` here) is declared for you and is
+immutable inside the body — you can read it but not reassign it, which is
+exactly what you want for a counter. Use `while` when the stopping condition
+isn't a simple range.
 
 ## `break` and `continue`
 

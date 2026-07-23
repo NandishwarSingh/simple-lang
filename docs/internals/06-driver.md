@@ -67,7 +67,7 @@ differs.
 
 Verified across arm64 macOS (native), x86_64 macOS (cross-compiled,
 executed via Rosetta), and x86_64 Linux (compiler rebuilt with gcc under
-QEMU): identical output from all 11 golden tests and all 11 benchmarks,
+QEMU): identical output from all golden tests and all 14 benchmarks,
 and the optimized-vs-`--no-opt` differential matches on every platform.
 That covers two architectures, two OSes, two host compilers, and both
 x86_64 ABIs.

@@ -92,8 +92,10 @@ QBE makes it fast.
 
 And since v0.5, Simple has its own optimizer *above* QBE: it inlines small
 functions into their callers, turns division by powers of two into bit
-shifts, folds constants, and deletes dead code — the things that require
-knowing the *language*, not the machine. It's always on; compile with
+shifts, folds constants, deletes dead code, and — since v0.95 —
+**auto-vectorizes** element-wise float loops and reductions into 128-bit
+SIMD, all the things that require knowing the *language*, not just the
+machine. It's always on; compile with
 `--no-opt` to see the naive translation and compare. (Try both on a
 program with `n % 2` in a loop and diff the `.ssa` files — the division
 vanishes.)

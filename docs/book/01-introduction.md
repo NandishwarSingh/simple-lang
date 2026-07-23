@@ -52,8 +52,9 @@ Simple opts out entirely.
 The compiler catches accidental modification — a whole category of bugs —
 before your program ever runs.
 
-**Easy concurrency (planned).** Running code on multiple cores will be one
-keyword: `spawn`. Threads communicate through channels, like Go.
+**Easy concurrency.** Running code on multiple cores is one keyword:
+`spawn`. Threads communicate through channels, like Go — and because they
+never share memory, data races are impossible to write (chapter 10).
 
 ## What you need to know already
 
