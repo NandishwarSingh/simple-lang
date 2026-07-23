@@ -94,10 +94,12 @@ renders an authentic NES frame (blue background, white/cyan text).
 H/V flip, back-to-front) over the background. The test ROM places four sprites
 via `$2003`/`$2004` and they appear as "ABCD" over the scene.
 
-**Input** works too: `$4016` implements the controller strobe + shift register,
-and `set_buttons` lets a frontend feed key state (a test reads B pressed / A up
-correctly). The core is now everything a game needs — CPU, PPU (bg + sprites),
-NMI timing, and controllers.
+**Input** works too, end-to-end on a real ROM: `$4016` implements the
+controller strobe + shift register. Booting `nestest.nes` normally renders its
+actual test-selection **menu**; holding **Start** (`nes.simp rom 60 8`) drives
+it to run the whole suite, and it displays **"OK" next to all 14 test
+categories** on screen — CPU, PPU rendering, and input all validated together
+by the ROM's own self-tests.
 
 Next: an **SDL2 live window** (real-time display + keyboard → `set_buttons`,
 like `examples/plasma.simp`), cycle-accurate timing so commercial ROMs boot
